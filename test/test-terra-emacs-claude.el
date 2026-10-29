@@ -1,10 +1,10 @@
-;;; test-terra-emacs-claude.el --- piece 4: the Claude Code handler -*- lexical-binding: t; -*-
+;;; test-terra-emacs-claude.el --- restoring Claude Code sessions -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 ;; Fake ~/.claude/sessions records (idle, busy, elsewhere, dead) and a
 ;; fake claude that records its argv and environment and then writes
-;; its own session record, as the real one does.  No secrets: the only
-;; secret-shaped names are made up and must never be recorded.
+;; its own session record, as the real one does.  Resume with a clean
+;; env, reuse a live buffer, never a second writer.
 
 ;;; Code:
 
@@ -72,8 +72,7 @@
                          'buffer-name (format "*claude %s*" id)
                          'session-id id 'cwd temporary-file-directory
                          'argv (list fake "--model" "opus" "--resume" "older" "--continue")
-                         'env '(("CLAUDE_CONFIG_DIR" . "/tmp/claude-config"))
-                         'terra-key (list 'claude id)))
+                         'env '(("CLAUDE_CONFIG_DIR" . "/tmp/claude-config"))))
 
 (ert-deftest terra-emacs-claude-resumes-with-a-clean-env ()
   (skip-unless (terra-emacs-test-have 'eat))
@@ -90,7 +89,7 @@
         (should (member "CLAUDE_CONFIG_DIR=/tmp/claude-config" env)))
       (should (equal (buffer-local-value 'terra-emacs-claude-session buf) "sess-1")))))
 
-(ert-deftest terra-emacs-claude-reuses-its-live-buffer-and-captures ()
+(ert-deftest terra-emacs-claude-reuses-its-live-buffer ()
   (skip-unless (terra-emacs-test-have 'eat))
   (terra-emacs-test--with-claude
     (let* ((rec (terra-emacs-test--record fake "sess-1"))
@@ -101,17 +100,9 @@
         (should (equal (plist-get (terra-emacs-claude-live-session "sess-1") :pid) pid))
         (should (eq (terra-emacs-leaf-restore rec) buf))
         (should (= pid (process-id (get-buffer-process buf))))
-        ;; Captured: the session, argv without resume flags, no secrets.
-        (with-current-buffer buf
-          (setq terra-emacs-claude-env '(("CLAUDE_CONFIG_DIR" . "/tmp/claude-config")
-                                         ("FAKE_API_TOKEN" . "made-up")
-                                         ("MY_PASSWORD_HINT" . "made-up"))))
-        (let ((cap (terra-emacs-leaf-capture buf)))
-          (should (equal (terra-emacs-leaf-prop cap 'session-id) "sess-1"))
-          (should (equal (terra-emacs-leaf-key cap) '(claude "sess-1")))
-          (should (equal (terra-emacs-leaf-prop cap 'argv) (list fake "--model" "opus")))
-          (should (equal (terra-emacs-leaf-prop cap 'env)
-                         '(("CLAUDE_CONFIG_DIR" . "/tmp/claude-config")))))))))
+        ;; Observed: the session it was restored from.
+        (should (equal (terra-emacs-leaf-key (terra-emacs-leaf-observe buf)) '(claude "sess-1")))
+        (should (equal (terra-emacs-claude-buffer-of pid) buf))))))
 
 (ert-deftest terra-emacs-claude-live-elsewhere-opens-a-view ()
   (terra-emacs-test--with-claude
@@ -129,6 +120,8 @@
               (let ((buf (terra-emacs-leaf-restore (terra-emacs-test--record fake id))))
                 (should (equal seen (list id (format "*claude %s*" id) status)))
                 (should (buffer-local-value 'buffer-read-only buf))
+                ;; A view is a stand-in: a plan retries the session later.
+                (should (buffer-local-value 'terra-emacs-leaf-placeholder buf))
                 (should (string-match-p "live elsewhere" (with-current-buffer buf (buffer-string))))
                 ;; Never a second writer: the fake never ran.
                 (should-not (file-exists-p (expand-file-name "argv" terra-emacs-test--out)))))

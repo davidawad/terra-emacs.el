@@ -3,8 +3,9 @@
 ;;; Commentary:
 ;; Diff a desired state against the live one, as data and in a buffer;
 ;; converge (create, rename, reorder, kill, level, layout); a dry run
-;; changes nothing; a second apply plans nothing.  The round trip:
-;; capture, kill every workspace, apply, capture again: equal.
+;; changes nothing; a second apply plans nothing.  From scratch twice:
+;; apply, kill every workspace, apply again, and nothing is left to do.
+;; No capture package is loaded: the engine observes on its own.
 
 ;;; Code:
 
@@ -136,45 +137,36 @@
     (should (equal (terra-emacs-test--ops (terra-emacs-apply state nil 'tab-bar))
                    '((create "tagged") (parameters "tagged"))))
     (should (equal (terra-emacs-backend-parameters 'tab-bar "tagged") '((owner . "pm") (digest . "d1"))))
-    (should (equal (plist-get (terra-emacs-capture "tagged" 'tab-bar) :parameters)
-                   '((owner . "pm") (digest . "d1"))))
     (should-not (terra-emacs-plan state 'tab-bar))
     (terra-emacs-backend-set-parameter 'tab-bar "tagged" 'digest "d2")
     (should (equal (terra-emacs-test--ops (terra-emacs-apply state nil 'tab-bar))
                    '((parameters "tagged"))))
     (should (equal (terra-emacs-backend-parameters 'tab-bar "tagged") '((owner . "pm") (digest . "d1"))))))
 
-(ert-deftest terra-emacs-layout-leaves-side-windows-alone ()
-  (terra-emacs-test-reset-tabs)
-  (let* ((files (terra-emacs-test--files "a.txt" "b.txt"))
-         (side (display-buffer-in-side-window (get-buffer-create "*side*") '((side . left))))
-         (tree (list :split 'below :sizes '(0.5 0.5)
-                     :children (list (terra-emacs-test--leaf (nth 0 files))
-                                     (terra-emacs-test--leaf (nth 1 files))))))
-    (unwind-protect
-        (progn
-          (terra-emacs-layout-apply tree)
-          (should (window-live-p side))
-          (should (terra-emacs-layout-same-p tree (terra-emacs-layout-capture))))
-      (when (window-live-p side) (delete-window side)))))
-
 (defun terra-emacs-test--round-trip (backend)
-  "Capture BACKEND's set, kill every workspace, apply, capture: equal."
+  "Apply the fixture in BACKEND, kill every workspace, apply again: converged."
   (let* ((files (terra-emacs-test--files "a.txt" "b.txt" "c.txt"))
          (state (apply #'terra-emacs-test--fixture files)))
     (terra-emacs-apply state nil backend)
-    (let ((before (terra-emacs-state-clean (terra-emacs-capture-all backend))))
-      ;; Each workspace's own windows were captured, not the shown one's.
-      (should (equal (mapcar (lambda (w) (length (terra-emacs-layout-leaves (plist-get w :layout))))
-                             (cl-remove-if-not (lambda (w) (member (plist-get w :name) '("code" "notes")))
-                                               (plist-get before :workspaces)))
-                     '(3 1)))
-      (funcall (if (eq backend 'tab-bar) #'terra-emacs-test-reset-tabs #'terra-emacs-test-persp-on))
-      (setq terra-emacs-levels nil)
-      (should-not (member "code" (terra-emacs-backend-workspaces backend)))
-      (terra-emacs-apply before nil backend)
-      (should (equal (terra-emacs-state-clean (terra-emacs-capture-all backend)) before))
-      (should-not (terra-emacs-plan before backend)))))
+    (should-not (terra-emacs-plan state backend))
+    ;; Each workspace's own windows are observed, the hidden ones too.
+    (should (equal (mapcar (lambda (n) (length (terra-emacs-layout-leaves
+                                                (terra-emacs-layout-of backend n))))
+                           '("code" "notes"))
+                   '(3 1)))
+    (funcall (if (eq backend 'tab-bar) #'terra-emacs-test-reset-tabs #'terra-emacs-test-persp-on))
+    (setq terra-emacs-levels nil)
+    (should-not (member "code" (terra-emacs-backend-workspaces backend)))
+    (terra-emacs-apply state nil backend)
+    (should (equal (terra-emacs-backend-workspaces backend) '("code" "notes" "mail")))
+    (should (equal (terra-emacs-backend-current backend) "code"))
+    (should (equal (mapcar (lambda (n) (terra-emacs-backend-level backend n)) '("code" "notes" "mail"))
+                   '("ops" "home" nil)))
+    (should (equal (mapcar (lambda (n) (terra-emacs-backend-id backend n)) '("code" "notes" "mail"))
+                   '("id-code" "id-notes" "id-mail")))
+    (should (terra-emacs-layout-same-p (plist-get (car (plist-get state :workspaces)) :layout)
+                                       (terra-emacs-layout-of backend "code")))
+    (should-not (terra-emacs-plan state backend))))
 
 (ert-deftest terra-emacs-round-trip-tab-bar ()
   (terra-emacs-test-reset-tabs)

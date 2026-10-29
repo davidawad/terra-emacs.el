@@ -35,7 +35,7 @@
 (require 'tab-bar)
 
 (defgroup terra-emacs nil
-  "Declarative workspaces and layouts: capture, plan, apply."
+  "Declarative workspaces and layouts: plan and apply."
   :group 'convenience
   :prefix "terra-emacs-")
 

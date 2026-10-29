@@ -20,9 +20,11 @@
   (or (getenv "TERRA_EMACS_TEST_PACKAGES") "/opt/emacs-test-packages")
   "Where the pinned third-party test packages live.")
 
-(dolist (dir (list (expand-file-name "eat-0.9.4" terra-emacs-test-packages)
-                   (expand-file-name "external/pkg-persp-mode" terra-emacs-test-packages)))
-  (when (file-directory-p dir) (add-to-list 'load-path dir t)))
+(dolist (dir (append (list (expand-file-name "eat-0.9.4" terra-emacs-test-packages)
+                           (expand-file-name "external/pkg-persp-mode" terra-emacs-test-packages))
+                     ;; Or name the package directories, colon-separated.
+                     (split-string (or (getenv "TERRA_EMACS_TEST_LOAD_PATH") "") ":" t)))
+  (when (file-directory-p dir) (add-to-list 'load-path (expand-file-name dir) t)))
 
 (defun terra-emacs-test-have (feature)
   "Non-nil when FEATURE loads."

@@ -1,9 +1,10 @@
-;;; test-terra-emacs-handlers.el --- piece 4: eshell, eat, vterm -*- lexical-binding: t; -*-
+;;; test-terra-emacs-handlers.el --- restoring eshell, eat, vterm -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Each handler captures cwd and command, restores them, reuses a live
-;; buffer instead of starting a second process, and marks a leaf whose
-;; process died stale so a plan restarts it.  vterm needs a compiled
+;; Each handler restores cwd and command, reuses a live buffer instead
+;; of starting a second process, and a leaf whose process died is
+;; observed stale so a plan restarts it.  No capture package is loaded:
+;; the engine observes the records it restored.  vterm needs a compiled
 ;; module, so a stand-in defining the slice the handler uses runs here.
 
 ;;; Code:
@@ -33,7 +34,6 @@
   (require 'eshell)
   (let* ((dir (terra-emacs-test-tmpdir))
          (rec (terra-emacs-leaf-make "*eshell*<work>" 'handler 'terra-emacs-eshell-bookmark-handler
-                                     'terra-key '(eshell "*eshell*<work>")
                                      'buffer-name "*eshell*<work>" 'cwd dir))
          (buf (terra-emacs-leaf-restore rec)))
     (unwind-protect
@@ -41,9 +41,8 @@
           (should (equal (buffer-name buf) "*eshell*<work>"))
           (should (eq (buffer-local-value 'major-mode buf) 'eshell-mode))
           (should (equal (buffer-local-value 'default-directory buf) dir))
-          (let ((again (terra-emacs-leaf-capture buf)))
-            (should (equal (terra-emacs-leaf-key again) (terra-emacs-leaf-key rec)))
-            (should (equal (terra-emacs-leaf-prop again 'cwd) dir)))
+          (should (equal (terra-emacs-leaf-key (terra-emacs-leaf-observe buf))
+                         (terra-emacs-leaf-key rec)))
           (should (eq (terra-emacs-leaf-restore rec) buf)))
       (terra-emacs-test--kill buf))))
 
@@ -52,22 +51,22 @@
   (let* ((dir (terra-emacs-test-tmpdir))
          (argv (list "/bin/sh" "-c" "pwd > where; echo $$ >> where; sleep 30"))
          (rec (terra-emacs-leaf-make "*shell-work*" 'handler 'terra-emacs-eat-bookmark-handler
-                                     'buffer-name "*shell-work*" 'cwd dir 'argv argv
-                                     'terra-key (list 'eat "*shell-work*" argv)))
+                                     'buffer-name "*shell-work*" 'cwd dir 'argv argv))
          (buf (terra-emacs-leaf-restore rec)))
     (unwind-protect
         (let ((pid (process-id (get-buffer-process buf))))
           (should (eq (buffer-local-value 'major-mode buf) 'eat-mode))
-          (should (string-prefix-p (directory-file-name (file-truename dir))
-                                   (terra-emacs-test--wait-file (expand-file-name "where" dir))))
-          ;; The capture is the record: cwd, the command, the same key.
-          (let ((cap (terra-emacs-leaf-capture buf)))
-            (should (equal (terra-emacs-leaf-prop cap 'argv) argv))
-            (should (equal (terra-emacs-leaf-key cap) (terra-emacs-leaf-key rec)))
-            (should-not (terra-emacs-leaf-stale-p cap)))
-          ;; eat gains bookmark support.
-          (should (equal (terra-emacs-leaf-prop (with-current-buffer buf (bookmark-make-record)) 'argv)
-                         argv))
+          ;; `pwd' prints the logical path; compare truenames (macOS
+          ;; temp dirs sit under the /var -> /private/var symlink).
+          (should (equal (file-truename (car (split-string (terra-emacs-test--wait-file
+                                                            (expand-file-name "where" dir))
+                                                           "\n")))
+                         (directory-file-name (file-truename dir))))
+          (should (equal (buffer-local-value 'terra-emacs-eat-argv buf) argv))
+          ;; Observed: the record it was restored from, live.
+          (let ((seen (terra-emacs-leaf-observe buf)))
+            (should (equal (terra-emacs-leaf-key seen) (list 'eat "*shell-work*" argv)))
+            (should-not (terra-emacs-leaf-stale-p seen)))
           ;; A second restore reuses the live process.
           (should (eq (terra-emacs-leaf-restore rec) buf))
           (should (= pid (process-id (get-buffer-process buf))))
@@ -78,7 +77,7 @@
             (terra-emacs-apply state nil 'tab-bar)
             (should-not (terra-emacs-plan state 'tab-bar))
             (delete-process (get-buffer-process buf))
-            (should (terra-emacs-leaf-stale-p (terra-emacs-leaf-capture buf)))
+            (should (terra-emacs-leaf-stale-p (terra-emacs-leaf-observe buf)))
             (should (equal (mapcar (lambda (s) (plist-get s :why)) (terra-emacs-plan state 'tab-bar))
                            '(stale)))
             (terra-emacs-apply state nil 'tab-bar)
@@ -86,6 +85,22 @@
             (should-not (= pid (process-id (get-buffer-process (get-buffer "*shell-work*")))))
             (should-not (terra-emacs-plan state 'tab-bar))))
       (terra-emacs-test--kill (get-buffer "*shell-work*")))))
+
+(ert-deftest terra-emacs-handlers-eat-never-kills-an-unknown-terminal ()
+  (skip-unless (terra-emacs-test-have 'eat))
+  ;; A terminal started by hand: the engine does not know its command.
+  (let* ((buf (get-buffer-create "*by-hand*"))
+         (rec (terra-emacs-leaf-make "*by-hand*" 'handler 'terra-emacs-eat-bookmark-handler
+                                     'buffer-name "*by-hand*" 'argv '("/bin/sh"))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (eat-mode)
+            (eat-exec buf "by-hand" "/bin/sh" nil '("-c" "sleep 30")))
+          (let ((pid (process-id (get-buffer-process buf))))
+            (should (eq (terra-emacs-leaf-restore rec) buf))
+            (should (= pid (process-id (get-buffer-process buf))))))
+      (terra-emacs-test--kill buf))))
 
 ;;;; A vterm stand-in: the slice of vterm the handler uses.
 
@@ -102,8 +117,7 @@
   (let* ((dir (terra-emacs-test-tmpdir))
          (cmd "sh -c 'pwd > where; sleep 30'")
          (rec (terra-emacs-leaf-make "*vterm work*" 'handler 'terra-emacs-vterm-bookmark-handler
-                                     'buffer-name "*vterm work*" 'cwd dir 'command cmd
-                                     'terra-key (list 'vterm "*vterm work*" cmd)))
+                                     'buffer-name "*vterm work*" 'cwd dir 'command cmd))
          (buf (terra-emacs-leaf-restore rec)))
     (unwind-protect
         (progn
@@ -112,10 +126,10 @@
           ;; temp dirs sit under the /var -> /private/var symlink).
           (should (equal (file-truename (terra-emacs-test--wait-file (expand-file-name "where" dir)))
                          (directory-file-name (file-truename dir))))
-          (let ((cap (terra-emacs-leaf-capture buf)))
-            (should (equal (terra-emacs-leaf-prop cap 'command) cmd))
-            (should (equal (terra-emacs-leaf-key cap) (terra-emacs-leaf-key rec))))
-          (should (eq (terra-emacs-leaf-restore rec) buf)))
+          (should (equal (terra-emacs-leaf-key (terra-emacs-leaf-observe buf))
+                         (list 'vterm "*vterm work*" cmd)))
+          (should (eq (terra-emacs-leaf-restore rec) buf))
+          (should (equal (buffer-local-value 'terra-emacs-vterm-command buf) cmd)))
       (terra-emacs-test--kill buf))))
 
 (provide 'test-terra-emacs-handlers)

@@ -10,21 +10,25 @@
 ;;; Commentary:
 
 ;; A leaf of a layout is a bookmark record, (NAME . ALIST), so any mode
-;; with bookmark support (files, dired, Info, help, PDFs, ...) captures
-;; and restores for free through `bookmark-make-record' and
-;; `bookmark-handle-bookmark'.  Modes without one get a handler on
-;; `terra-emacs-leaf-capture-functions' (terra-emacs-handlers.el writes
-;; them for eshell, eat and vterm; terra-emacs-claude.el for Claude
-;; Code); anything else comes back as a buffer of the same name.
+;; with bookmark support (files, dired, Info, help, PDFs, ...) restores
+;; for free through `bookmark-handle-bookmark'.  Modes without one get a
+;; handler (terra-emacs-handlers.el for eshell, eat and vterm;
+;; terra-emacs-claude.el for Claude Code); anything else comes back as a
+;; buffer of the same name.
 ;;
-;; terra-emacs adds three properties to a record:
+;; terra-emacs reads three properties of a record besides the handler's:
 ;;
-;;   buffer-name  the buffer's name when captured.
-;;   terra-key    the leaf's identity, compared to decide whether a
-;;                window already shows the right thing (default: the
-;;                handler plus the file, or plus the buffer name).
-;;   terra-stale  set on a captured leaf whose process is gone, so a
+;;   buffer-name  the buffer's name.
+;;   terra-key    an explicit identity, overriding the one the handler's
+;;                `terra-emacs-leaf-key-function' property computes.
+;;   terra-stale  set on an observed leaf whose process is gone, so a
 ;;                plan restarts it; never written to a state file.
+;;
+;; To decide whether a window already shows the right thing, a plan
+;; observes it (`terra-emacs-leaf-observe'): the record a capture
+;; handler on `terra-emacs-leaf-capture-functions' gives (the
+;; terra-emacs-capture package installs them), else the record this
+;; engine restored the buffer from, else what the buffer visits.
 
 ;;; Code:
 
@@ -33,12 +37,17 @@
 
 (defvar terra-emacs-leaf-capture-functions nil
   "Functions of a buffer returning its leaf record, or nil to pass.
-The first non-nil answer wins; add a handler with `add-hook'.")
+The first non-nil answer wins; add a handler with `add-hook'.  The
+engine only reads them; an exporter such as terra-emacs-capture fills
+them.")
 
-(defconst terra-emacs-leaf-dropped-properties
-  '(front-context-string rear-context-string front-context-region-string
-    rear-context-region-string last-modified defaults annotation)
-  "Bookmark properties a leaf record leaves out: they change with every edit.")
+(defvar-local terra-emacs-leaf-record nil
+  "The leaf record this buffer was restored from.")
+(put 'terra-emacs-leaf-record 'permanent-local t)
+
+(defvar-local terra-emacs-leaf-placeholder nil
+  "Non-nil in a buffer standing in for a leaf that did not come back.")
+(put 'terra-emacs-leaf-placeholder 'permanent-local t)
 
 (defun terra-emacs-leaf-prop (record prop)
   "Property PROP of the leaf RECORD."
@@ -48,50 +57,75 @@ The first non-nil answer wins; add a handler with `add-hook'.")
   "A leaf record NAME with the property plist PROPS."
   (cons name (cl-loop for (k v) on props by #'cddr collect (cons k v))))
 
-(defun terra-emacs-leaf--bookmark (buffer)
-  "BUFFER's own bookmark record, trimmed, or nil when it has none."
-  (with-current-buffer buffer
-    (when (or buffer-file-name
-              (bound-and-true-p dired-directory)
-              (not (eq bookmark-make-record-function #'bookmark-make-record-default)))
-      (let ((rec (ignore-errors (bookmark-make-record))))
-        (when (consp rec)
-          (cons (buffer-name)
-                (append (cl-remove-if (lambda (c)
-                                        (or (memq (car-safe c) terra-emacs-leaf-dropped-properties)
-                                            (eq (car-safe c) 'buffer-name)))
-                                      (if (stringp (car rec)) (cdr rec) rec))
-                        (list (cons 'buffer-name (buffer-name))))))))))
-
-(defun terra-emacs-leaf-capture (buffer)
-  "The leaf record that brings BUFFER back."
-  (or (run-hook-with-args-until-success 'terra-emacs-leaf-capture-functions buffer)
-      (terra-emacs-leaf--bookmark buffer)
-      (terra-emacs-leaf-make (buffer-name buffer)
-                             'handler 'terra-emacs-leaf-buffer-handler
-                             'buffer-name (buffer-name buffer))))
-
 (defun terra-emacs-leaf-buffer-handler (record)
   "Make RECORD's buffer, by name, current (creating it empty when gone)."
-  (set-buffer (get-buffer-create (terra-emacs-leaf-prop record 'buffer-name))))
+  (set-buffer (get-buffer-create (or (terra-emacs-leaf-prop record 'buffer-name) (car record)))))
+
+;;;; Identity
+
+(defun terra-emacs-leaf--path (file)
+  "FILE expanded, a directory with its trailing slash."
+  (let ((f (expand-file-name file)))
+    (if (file-directory-p f) (file-name-as-directory f) f)))
 
 (defun terra-emacs-leaf-key (record)
   "The identity of the leaf RECORD: two leaves with one key show one thing."
-  (or (terra-emacs-leaf-prop record 'terra-key)
-      (let ((handler (terra-emacs-leaf-prop record 'handler))
-            (file (terra-emacs-leaf-prop record 'filename)))
-        (cond (file (list (or handler 'file) (expand-file-name file)))
-              ((eq handler 'terra-emacs-leaf-buffer-handler)
-               (list 'buffer (terra-emacs-leaf-prop record 'buffer-name)))
-              (t (list handler (terra-emacs-leaf-prop record 'buffer-name)))))))
+  (let* ((handler (terra-emacs-leaf-prop record 'handler))
+         (fn (and (symbolp handler) handler (get handler 'terra-emacs-leaf-key-function)))
+         (file (terra-emacs-leaf-prop record 'filename)))
+    (cond ((terra-emacs-leaf-prop record 'terra-key))
+          (fn (funcall fn record))
+          (file (list 'file (terra-emacs-leaf--path file)))
+          (t (list handler (or (terra-emacs-leaf-prop record 'buffer-name) (car record)))))))
+
+(put 'terra-emacs-leaf-buffer-handler 'terra-emacs-leaf-key-function
+     (lambda (record)
+       (list 'buffer (or (terra-emacs-leaf-prop record 'buffer-name) (car record)))))
+
+(defun terra-emacs-leaf-process-p (record)
+  "Non-nil when RECORD's handler runs a process (its `terra-emacs-leaf-process')."
+  (let ((handler (terra-emacs-leaf-prop record 'handler)))
+    (and (symbolp handler) handler (get handler 'terra-emacs-leaf-process))))
 
 (defun terra-emacs-leaf-stale-p (record)
-  "Non-nil when the captured RECORD's process is gone."
+  "Non-nil when the observed RECORD's process is gone."
   (terra-emacs-leaf-prop record 'terra-stale))
 
 (defun terra-emacs-leaf-clean (record)
   "RECORD without what never goes in a state file."
   (cons (car record) (cl-remove 'terra-stale (cdr record) :key #'car-safe)))
+
+;;;; Observing
+
+(defun terra-emacs-leaf--visit-record (buffer)
+  "A record naming what BUFFER visits: its file, its directory, or itself."
+  (with-current-buffer buffer
+    (let ((file (or buffer-file-name
+                    (let ((d (bound-and-true-p dired-directory)))
+                      (if (consp d) (car d) d)))))
+      (if file
+          (terra-emacs-leaf-make (buffer-name) 'filename (terra-emacs-leaf--path file)
+                                 'buffer-name (buffer-name))
+        (terra-emacs-leaf-make (buffer-name) 'handler 'terra-emacs-leaf-buffer-handler
+                               'buffer-name (buffer-name))))))
+
+(defun terra-emacs-leaf-mark-stale (record buffer)
+  "RECORD, marked stale when it runs a process and BUFFER's has ended."
+  (if (and (terra-emacs-leaf-process-p record)
+           (not (terra-emacs-leaf-stale-p record))
+           (not (process-live-p (get-buffer-process buffer))))
+      (append record (list (cons 'terra-stale t)))
+    record))
+
+(defun terra-emacs-leaf-observe (buffer)
+  "The leaf record BUFFER shows now, for comparing with a desired one."
+  (terra-emacs-leaf-mark-stale
+   (or (run-hook-with-args-until-success 'terra-emacs-leaf-capture-functions buffer)
+       (buffer-local-value 'terra-emacs-leaf-record buffer)
+       (terra-emacs-leaf--visit-record buffer))
+   buffer))
+
+;;;; Restoring
 
 (defun terra-emacs-leaf--placeholder (record why)
   "A buffer saying RECORD could not come back, and WHY."
@@ -100,20 +134,27 @@ The first non-nil answer wins; add a handler with `add-hook'.")
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert (format "terra-emacs could not restore %S:\n%s\n" (car record) why)))
-      (special-mode))
+      (special-mode)
+      (setq terra-emacs-leaf-placeholder t))
     (message "terra-emacs: %s: %s" (car record) why)
     buf))
 
 (defun terra-emacs-leaf-restore (record)
-  "The buffer RECORD brings back (a placeholder when it cannot)."
+  "The buffer RECORD brings back (a placeholder when it cannot).
+A buffer that really came back remembers RECORD, so a plan sees it
+shows what was asked; a placeholder does not, so a plan retries it."
   (let ((file (terra-emacs-leaf-prop record 'filename)))
     (if (and file (not (file-remote-p file)) (not (file-exists-p file)))
         (terra-emacs-leaf--placeholder record (format "%s does not exist" file))
       (condition-case err
-          (save-window-excursion
-            (save-current-buffer
-              (bookmark-handle-bookmark record)
-              (current-buffer)))
+          (let ((buf (save-window-excursion
+                       (save-current-buffer
+                         (bookmark-handle-bookmark record)
+                         (current-buffer)))))
+            (unless (buffer-local-value 'terra-emacs-leaf-placeholder buf)
+              (with-current-buffer buf
+                (setq terra-emacs-leaf-record (terra-emacs-leaf-clean record))))
+            buf)
         (error (terra-emacs-leaf--placeholder record (error-message-string err)))))))
 
 (provide 'terra-emacs-leaf)

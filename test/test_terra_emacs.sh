@@ -4,7 +4,8 @@
 # warnings as errors. Usage: test_terra_emacs.sh [suite-name...], where a
 # suite name is a test/test-*.el basename without its extension; no
 # argument runs them all. The pinned eat and persp-mode come from
-# TERRA_EMACS_TEST_PACKAGES (default /opt/emacs-test-packages); suites
+# TERRA_EMACS_TEST_PACKAGES (default /opt/emacs-test-packages), or from
+# the colon-separated directories in TERRA_EMACS_TEST_LOAD_PATH; suites
 # needing one skip their tests when it is missing.
 set -euo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,8 +13,9 @@ PKG_DIR="$(dirname "$TEST_DIR")"
 EMACS_BIN="${EMACS:-emacs}"
 PKGS="${TERRA_EMACS_TEST_PACKAGES:-/opt/emacs-test-packages}"
 LP=(-L "$PKG_DIR")
-for d in "$PKGS/eat-0.9.4" "$PKGS/external/pkg-persp-mode"; do
-  if [ -d "$d" ]; then LP+=(-L "$d"); fi
+IFS=: read -r -a EXTRA <<< "${TERRA_EMACS_TEST_LOAD_PATH:-}"
+for d in "$PKGS/eat-0.9.4" "$PKGS/external/pkg-persp-mode" ${EXTRA[@]+"${EXTRA[@]}"}; do
+  if [ -n "$d" ] && [ -d "$d" ]; then LP+=(-L "$d"); fi
 done
 
 OUT="$(mktemp -d)"

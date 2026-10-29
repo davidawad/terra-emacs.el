@@ -9,15 +9,11 @@
 
 ;;; Commentary:
 
-;; A Claude Code session running in an eat buffer captures as:
+;; A Claude Code leaf is a record
 ;;
-;;   session-id  from ~/.claude/sessions/<pid>.json of the claude
-;;               process (the eat process or one of its descendants).
-;;   cwd, argv   the claude command line minus --resume, --session-id
-;;               and --continue.
-;;   env         the variables named by `terra-emacs-claude-env-regexp'
-;;               it was given, never one matching
-;;               `terra-emacs-claude-secret-regexp'.
+;;   (NAME (handler . terra-emacs-claude-bookmark-handler)
+;;         (buffer-name . NAME) (session-id . ID) (cwd . DIR)
+;;         (argv "claude" ...) (env (VAR . VALUE) ...))
 ;;
 ;; Restoring runs ARGV --resume SESSION-ID in eat, with the inherited
 ;; agent variables (`terra-emacs-claude-scrub-regexp': CLAUDE*,
@@ -27,6 +23,10 @@
 ;; session live, an Emacs eat buffer already running it is reused, and a
 ;; session live anywhere else opens `terra-emacs-claude-view-function'
 ;; (a read-only view) instead, saying so.
+;;
+;; The session files are read here only to keep to one writer; reading a
+;; live session's id, argv and env into a record is the capture side, in
+;; the terra-emacs-capture package.
 
 ;;; Code:
 
@@ -45,7 +45,7 @@
   :type 'directory)
 
 (defcustom terra-emacs-claude-program "claude"
-  "The claude command, when a capture finds no command line of its own."
+  "The claude command, when a record has no argv of its own."
   :type 'string)
 
 (defcustom terra-emacs-claude-scrub-regexp
@@ -53,18 +53,9 @@
   "Inherited environment entries a restored claude must not see."
   :type 'regexp)
 
-(defcustom terra-emacs-claude-env-regexp
-  "\\`\\(CLAUDE_CONFIG_DIR\\|ANTHROPIC_[A-Z0-9_]*\\|CLAUDE_CODE_[A-Z0-9_]*\\)\\'"
-  "Names of the variables a capture records from a session's environment."
-  :type 'regexp)
-
-(defcustom terra-emacs-claude-secret-regexp "TOKEN\\|KEY\\|SECRET\\|PASSWORD"
-  "Names matching this (any case) are never recorded."
-  :type 'regexp)
-
 (defcustom terra-emacs-claude-resume-flags
   '(("--resume" . t) ("-r" . t) ("--session-id" . t) ("--continue" . nil) ("-c" . nil))
-  "Flags a capture drops from argv: (FLAG . TAKES-A-VALUE)."
+  "Flags dropped from a recorded argv before --resume: (FLAG . TAKES-A-VALUE)."
   :type '(alist :key-type string :value-type boolean))
 
 (defcustom terra-emacs-claude-view-function #'terra-emacs-claude-view-default
@@ -83,7 +74,7 @@ Emacs's eat buffers."
 
 ;;;; Session files
 
-(defun terra-emacs-claude--pid-live-p (pid)
+(defun terra-emacs-claude-pid-live-p (pid)
   "Non-nil when process PID exists."
   (and (integerp pid) (> pid 0)
        (or (process-attributes pid)
@@ -117,10 +108,10 @@ Emacs's eat buffers."
 (defun terra-emacs-claude-live-session (id)
   "The record of session ID when its process is alive, else nil."
   (cl-find-if (lambda (s) (and (equal (plist-get s :sessionId) id)
-                               (terra-emacs-claude--pid-live-p (plist-get s :pid))))
+                               (terra-emacs-claude-pid-live-p (plist-get s :pid))))
               (terra-emacs-claude-sessions)))
 
-(defun terra-emacs-claude--descends-p (pid ancestor)
+(defun terra-emacs-claude-descends-p (pid ancestor)
   "Non-nil when PID is ANCESTOR or one of its descendants."
   (cl-loop repeat 64
            while (and (integerp pid) (> pid 1))
@@ -135,20 +126,11 @@ Emacs's eat buffers."
 
 (defun terra-emacs-claude-buffer-of (pid)
   "The live eat buffer whose process is PID or an ancestor of it, or nil."
-  (cl-find-if (lambda (b) (terra-emacs-claude--descends-p
+  (cl-find-if (lambda (b) (terra-emacs-claude-descends-p
                            pid (process-id (get-buffer-process b))))
               (terra-emacs-claude--eat-buffers)))
 
-(defun terra-emacs-claude--session-in (buffer)
-  "The live session record whose claude runs in BUFFER, or nil."
-  (let ((proc (get-buffer-process buffer)))
-    (and proc (process-live-p proc)
-         (cl-find-if (lambda (s) (and (terra-emacs-claude--pid-live-p (plist-get s :pid))
-                                      (terra-emacs-claude--descends-p (plist-get s :pid)
-                                                                      (process-id proc))))
-                     (terra-emacs-claude-sessions)))))
-
-;;;; Capture
+;;;; Restore
 
 (defun terra-emacs-claude-strip-argv (argv)
   "ARGV without the flags of `terra-emacs-claude-resume-flags'."
@@ -160,57 +142,6 @@ Emacs's eat buffers."
               ((and (cdr flag) (not (string-search "=" a))) (pop argv)))))
     (nreverse out)))
 
-(defun terra-emacs-claude--argv (buffer session)
-  "The claude command line of BUFFER (whose live SESSION record may be nil)."
-  (let ((argv (terra-emacs-eat-argv buffer)))
-    (unless (and argv (string-match-p "claude" (file-name-nondirectory (car argv))))
-      ;; eat runs a shell, or a wrapper: take claude's own arguments.
-      (let* ((args (and session (alist-get 'args (process-attributes (plist-get session :pid)))))
-             (words (and args (split-string args " " t))))
-        (setq argv (or (cl-member-if (lambda (w) (string-match-p "claude" (file-name-nondirectory w)))
-                                  words)
-                       (list terra-emacs-claude-program)))))
-    (terra-emacs-claude-strip-argv argv)))
-
-(defun terra-emacs-claude--proc-env (pid)
-  "PID's environment as (NAME . VALUE) pairs, where /proc shows it."
-  (let ((file (format "/proc/%d/environ" pid)))
-    (when (file-readable-p file)
-      (with-temp-buffer
-        (set-buffer-multibyte nil)
-        (ignore-errors (insert-file-contents-literally file))
-        (delq nil (mapcar (lambda (e) (when (string-match "\\`\\([^=]+\\)=\\(.*\\)\\'" e)
-                                        (cons (match-string 1 e) (match-string 2 e))))
-                          (split-string (buffer-string) "\0" t)))))))
-
-(defun terra-emacs-claude-recordable-env (pairs)
-  "PAIRS ((NAME . VALUE) ...) a capture may record: needed, never secret."
-  (let ((case-fold-search t))
-    (cl-remove-if (lambda (p) (or (string-match-p terra-emacs-claude-secret-regexp (car p))
-                                  (let ((case-fold-search nil))
-                                    (not (string-match-p terra-emacs-claude-env-regexp (car p))))))
-                  (cl-remove-duplicates pairs :key #'car :test #'equal :from-end t))))
-
-(defun terra-emacs-claude-capture (buffer)
-  "The leaf record of BUFFER when it is an eat buffer running Claude Code."
-  (when (eq (buffer-local-value 'major-mode buffer) 'eat-mode)
-    (let* ((session (terra-emacs-claude--session-in buffer))
-           (id (or (plist-get session :sessionId)
-                   (buffer-local-value 'terra-emacs-claude-session buffer))))
-      (when id
-        (with-current-buffer buffer
-          (apply #'terra-emacs-leaf-make (buffer-name)
-                 'handler 'terra-emacs-claude-bookmark-handler
-                 'buffer-name (buffer-name) 'session-id id
-                 'cwd (or (plist-get session :cwd) default-directory)
-                 'argv (terra-emacs-claude--argv buffer session)
-                 'env (terra-emacs-claude-recordable-env
-                       (append terra-emacs-claude-env
-                               (and session (terra-emacs-claude--proc-env (plist-get session :pid)))))
-                 'terra-key (list 'claude id)
-                 (unless (process-live-p (get-buffer-process buffer)) (list 'terra-stale t))))))))
-
-;;;; Restore
 
 (defun terra-emacs-claude-child-environment (env)
   "`process-environment' scrubbed of inherited agent variables, plus ENV."
@@ -258,11 +189,15 @@ Emacs's eat buffers."
            (live
             (message "terra-emacs: Claude session %s is live elsewhere (pid %s); opened a read-only view"
                      id (plist-get live :pid))
-            (funcall terra-emacs-claude-view-function id record live))
+            (let ((view (funcall terra-emacs-claude-view-function id record live)))
+              ;; A view stands in for the session: a plan retries it.
+              (with-current-buffer view (setq terra-emacs-leaf-placeholder t))
+              view))
            (t (terra-emacs-claude-start record))))))
 
-;; Before the generic eat handler: a Claude buffer is an eat buffer too.
-(add-hook 'terra-emacs-leaf-capture-functions #'terra-emacs-claude-capture -50)
+(put 'terra-emacs-claude-bookmark-handler 'terra-emacs-leaf-process t)
+(put 'terra-emacs-claude-bookmark-handler 'terra-emacs-leaf-key-function
+     (lambda (record) (list 'claude (terra-emacs-leaf-prop record 'session-id))))
 
 (provide 'terra-emacs-claude)
 ;;; terra-emacs-claude.el ends here

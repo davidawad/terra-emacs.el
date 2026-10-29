@@ -28,13 +28,16 @@
 ;; Workspaces match by id first, then by name.  A layout is rebuilt only
 ;; when its shape or a leaf differs, or a leaf's process died; leaf
 ;; handlers reuse a live buffer, so processes start only where missing.
+;; The live layout is observed (`terra-emacs-leaf-observe'): a hidden
+;; workspace is read off the window state its backend keeps, so a plan
+;; shows nothing.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'terra-emacs-backend)
 (require 'terra-emacs-layout)
-(require 'terra-emacs-capture)
+(require 'terra-emacs-state)
 
 (defun terra-emacs-plan--state (state)
   "STATE, read from the file it names when it is a string."
@@ -85,7 +88,7 @@
     (when want
       (if (null a)
           (list :op 'layout :ws (plist-get d :name) :layout want :why 'missing)
-        (let ((have (terra-emacs-capture-layout backend (plist-get a :name))))
+        (let ((have (terra-emacs-layout-of backend (plist-get a :name))))
           (cond ((not (terra-emacs-layout-same-p want have))
                  (list :op 'layout :ws (plist-get d :name) :layout want :why 'differs))
                 ((terra-emacs-layout-stale-p have)
