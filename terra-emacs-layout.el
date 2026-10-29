@@ -77,12 +77,24 @@
             min-pixel-width-safe))
   "The minimum-sizes head of a synthesized window state.")
 
-(defun terra-emacs-layout--state-node (node width height last)
-  "The window state item of NODE, a WIDTH by HEIGHT share; LAST: the last child."
+(defun terra-emacs-layout--buffer-entry (buffer selected)
+  "The `buffer' item of a leaf showing BUFFER; SELECTED: its window is selected.
+Every leaf needs one: `window-state-put' builds windows on a temporary
+buffer and kills it after, which deletes any window still showing it."
+  `(buffer ,(buffer-name buffer) (selected . ,selected) (hscroll . 0)
+           (fringes nil nil nil nil) (margins nil) (scroll-bars nil nil nil nil nil nil nil)
+           (vscroll . 0) (dedicated) (point . ,(with-current-buffer buffer (point)))
+           (start . ,(with-current-buffer buffer (save-excursion (forward-line -2) (point))))))
+
+(defun terra-emacs-layout--state-node (node width height last buffers)
+  "The window state item of NODE, a WIDTH by HEIGHT share; LAST: the last child.
+BUFFERS is a list cell whose car lists the leaves' buffers, consumed in order."
   (let ((common (append (and last (list '(last . t)))
                         (list (cons 'normal-width width) (cons 'normal-height height)))))
     (if (plist-member node :leaf)
-        `(leaf ,@common (parameters (terra-emacs-leaf . ,(plist-get node :leaf))))
+        (let ((buffer (pop (car buffers))))
+          `(leaf ,@common (parameters (terra-emacs-leaf . ,(plist-get node :leaf)))
+                 ,(terra-emacs-layout--buffer-entry buffer (and (plist-get node :selected) t))))
       (let* ((right (eq (plist-get node :split) 'right))
              (children (plist-get node :children))
              (sizes (terra-emacs-layout--sizes node)))
@@ -90,7 +102,7 @@
           ,@(cl-loop for (child . more) on children
                      for s in sizes
                      collect (terra-emacs-layout--state-node
-                              child (if right s 1.0) (if right 1.0 s) (null more))))))))
+                              child (if right s 1.0) (if right 1.0 s) (null more) buffers)))))))
 
 (defun terra-emacs-layout--sizes (node)
   "NODE's shares, one per child, defaulting to equal ones."
@@ -98,9 +110,10 @@
          (sizes (plist-get node :sizes)))
     (if (= (length sizes) n) sizes (make-list n (/ 1.0 n)))))
 
-(defun terra-emacs-layout-window-state (tree)
-  "The window state `window-state-put' builds TREE from."
-  (let ((root (terra-emacs-layout--state-node tree 1.0 1.0 nil)))
+(defun terra-emacs-layout-window-state (tree buffers)
+  "The window state that `window-state-put' builds TREE from.
+Its leaves show BUFFERS, in order."
+  (let ((root (terra-emacs-layout--state-node tree 1.0 1.0 nil (list buffers))))
     ;; Zero totals and pixel sizes: never equal to the frame's, so the
     ;; normalized shares are used.
     (cons terra-emacs-layout--head
@@ -108,41 +121,24 @@
                         '(total-width . 0) '(total-height . 0))
                   (cdr root)))))
 
-(defun terra-emacs-layout--selected (tree)
-  "The 0-based index, in window order, of TREE's selected leaf, or nil."
-  (let ((i -1) found)
-    (cl-labels ((walk (node)
-                  (if (plist-member node :leaf)
-                      (progn (cl-incf i) (when (plist-get node :selected) (setq found i)))
-                    (mapc #'walk (plist-get node :children)))))
-      (walk tree))
-    found))
-
 (defun terra-emacs-layout-apply (tree &optional frame)
   "Lay TREE out in FRAME (default: the selected one), showing each leaf."
   (let* ((frame (or frame (selected-frame)))
-         (root (frame-root-window frame)))
+         (buffers (mapcar #'terra-emacs-leaf-restore (terra-emacs-layout-leaves tree))))
     (with-selected-frame frame
       (delete-other-windows (frame-first-window frame))
-      (setq root (frame-root-window frame))
+      (set-window-buffer (frame-first-window frame) (car buffers))
       (condition-case err
-          (window-state-put (terra-emacs-layout-window-state tree) root 'safe)
+          (window-state-put (terra-emacs-layout-window-state tree buffers)
+                            (frame-root-window frame) 'safe)
         (error (message "terra-emacs: the frame cannot hold this layout (%s); one window"
                         (error-message-string err))
                (delete-other-windows (frame-first-window frame))
+               (set-window-buffer (frame-first-window frame) (car buffers))
                (set-window-parameter (frame-first-window frame) 'terra-emacs-leaf
                                      (car (terra-emacs-layout-leaves tree)))))
-      (let ((windows (window-list frame 'nomini (frame-first-window frame)))
-            (selected (terra-emacs-layout--selected tree)))
-        (dolist (w windows)
-          (let ((rec (window-parameter w 'terra-emacs-leaf)))
-            (when rec
-              (let ((buf (terra-emacs-leaf-restore rec)))
-                (set-window-buffer w buf)
-                (set-window-point w (with-current-buffer buf (point)))
-                (run-hook-with-args 'terra-emacs-layout-show-functions w buf)))))
-        (when (and selected (nth selected windows))
-          (select-window (nth selected windows)))))))
+      (dolist (w (window-list frame 'nomini (frame-first-window frame)))
+        (run-hook-with-args 'terra-emacs-layout-show-functions w (window-buffer w))))))
 
 ;;;; Comparing
 
