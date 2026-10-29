@@ -45,14 +45,23 @@
         (terra-emacs-backend-set-id backend name id)
         id)))
 
+(defun terra-emacs-capture-layout (backend name)
+  "The layout of BACKEND's workspace NAME.
+A hidden workspace is read off the window state BACKEND keeps for it,
+so capturing shows nothing; else it is captured shown."
+  (let ((state (and (not (equal name (terra-emacs-backend-current backend)))
+                    (terra-emacs-backend-window-state backend name))))
+    (if state
+        (terra-emacs-layout-from-state state)
+      (terra-emacs-backend-with-workspace backend name #'terra-emacs-layout-capture))))
+
 (defun terra-emacs-capture (&optional workspace backend)
   "The state of WORKSPACE (default: the shown one) in BACKEND.
 Interactively, show it in a buffer."
   (interactive)
   (let* ((backend (or backend (terra-emacs-current-backend)))
          (name (or workspace (terra-emacs-backend-current backend)))
-         (layout (terra-emacs-backend-with-workspace
-                  backend name #'terra-emacs-layout-capture))
+         (layout (terra-emacs-capture-layout backend name))
          (level (terra-emacs-backend-level backend name))
          (params (terra-emacs-backend-parameters backend name))
          (ws (append (list :name name :id (terra-emacs--ws-id backend name))

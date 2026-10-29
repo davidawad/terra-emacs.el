@@ -94,7 +94,7 @@ Errors are reported, never raised: this runs on `kill-emacs-hook'."
         (terra-emacs-save terra-emacs-autosave-name)
       (error (message "terra-emacs: autosave failed: %s" (error-message-string err))))))
 
-(defun terra-emacs-autosave--frame-ready-p ()
+(defun terra-emacs-autosave-frame-ready-p ()
   "Non-nil when a frame can show workspaces (a daemon waits for a client)."
   (or (not (daemonp))
       (cl-some (lambda (f) (frame-parameter f 'client)) (frame-list))))
@@ -116,6 +116,17 @@ Errors are reported, never raised: this runs on `kill-emacs-hook'."
                  nil))))))
 
 ;;;###autoload
+(defun terra-emacs-restore-autosave ()
+  "Converge on the autosave set now; the plan.
+The first call in an Emacs is its start-up apply (see
+`terra-emacs-autosave-save', which waits for it)."
+  (interactive)
+  (if (not terra-emacs-autosave--restored)
+      (terra-emacs-autosave-restore-now)
+    (let ((file (terra-emacs-set-file terra-emacs-autosave-name)))
+      (and (file-exists-p file) (terra-emacs-apply file)))))
+
+;;;###autoload
 (define-minor-mode terra-emacs-autosave-mode
   "Save the workspace state on exit and every few minutes; restore it at start."
   :global t :group 'terra-emacs
@@ -129,7 +140,7 @@ Errors are reported, never raised: this runs on `kill-emacs-hook'."
           (run-at-time terra-emacs-autosave-interval terra-emacs-autosave-interval
                        #'terra-emacs-autosave-save))
     (when (and terra-emacs-autosave-restore (not terra-emacs-autosave--restored))
-      (cond ((and after-init-time (terra-emacs-autosave--frame-ready-p))
+      (cond ((and after-init-time (terra-emacs-autosave-frame-ready-p))
              (terra-emacs-autosave-restore-now))
             ((daemonp)
              (add-hook 'server-after-make-frame-hook #'terra-emacs-autosave-restore-now))

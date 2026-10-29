@@ -85,8 +85,7 @@
     (when want
       (if (null a)
           (list :op 'layout :ws (plist-get d :name) :layout want :why 'missing)
-        (let ((have (terra-emacs-backend-with-workspace
-                     backend (plist-get a :name) #'terra-emacs-layout-capture)))
+        (let ((have (terra-emacs-capture-layout backend (plist-get a :name))))
           (cond ((not (terra-emacs-layout-same-p want have))
                  (list :op 'layout :ws (plist-get d :name) :layout want :why 'differs))
                 ((terra-emacs-layout-stale-p have)

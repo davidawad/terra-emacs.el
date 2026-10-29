@@ -107,6 +107,11 @@ Which parameters a backend saves is its own option; nil values are left out."
   "Set the saved parameter PARAM of BACKEND's workspace NAME to VALUE."
   nil)
 
+(cl-defgeneric terra-emacs-backend-window-state (_backend _name)
+  "The window state BACKEND keeps for its hidden workspace NAME, or nil.
+Capturing reads a hidden workspace off it instead of showing it."
+  nil)
+
 (cl-defgeneric terra-emacs-backend-add-buffer (_backend _name _buffer)
   "Note that BUFFER belongs to workspace NAME (persp-mode keeps buffer lists)."
   nil)
@@ -208,6 +213,10 @@ Which parameters a backend saves is its own option; nil values are left out."
   (let ((tab (terra-emacs-tab-bar--tab name)))
     (setcdr tab (cons (cons 'terra-emacs-id id)
                       (assq-delete-all 'terra-emacs-id (cdr tab))))))
+
+(cl-defmethod terra-emacs-backend-window-state ((_ (eql 'tab-bar)) name)
+  (let ((tab (terra-emacs-tab-bar--tab name)))
+    (unless (eq (car tab) 'current-tab) (alist-get 'ws (cdr tab)))))
 
 (cl-defmethod terra-emacs-backend-parameters ((_ (eql 'tab-bar)) name)
   (let ((tab (terra-emacs-tab-bar--tab name)))

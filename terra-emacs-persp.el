@@ -37,6 +37,7 @@
 (declare-function persp-add-buffer "persp-mode"
                   (&optional buffs-or-names persp switchorno called-interactively-p))
 (declare-function get-current-persp "persp-mode" (&optional frame window))
+(declare-function persp-window-conf "persp-mode" (persp))
 
 (defcustom terra-emacs-persp-level-parameter 'terra-emacs-level
   "Perspective parameter holding a workspace's level."
@@ -140,6 +141,10 @@ Nil orders workspaces as `persp-names-cache' does."
 
 (cl-defmethod terra-emacs-backend-set-parameter ((_ (eql 'persp-mode)) name param value)
   (set-persp-parameter param value (terra-emacs-persp--get name)))
+
+(cl-defmethod terra-emacs-backend-window-state ((_ (eql 'persp-mode)) name)
+  (unless (equal name (terra-emacs-backend-current 'persp-mode))
+    (persp-window-conf (terra-emacs-persp--get name))))
 
 (cl-defmethod terra-emacs-backend-add-buffer ((_ (eql 'persp-mode)) name buffer)
   (persp-add-buffer buffer (terra-emacs-persp--get name) nil nil))

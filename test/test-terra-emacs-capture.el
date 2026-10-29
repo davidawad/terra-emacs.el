@@ -18,6 +18,8 @@
   "A file NAME in a fresh temp dir, created with some text."
   (let ((f (expand-file-name name (or terra-emacs-test--dir
                                       (setq terra-emacs-test--dir (terra-emacs-test-tmpdir))))))
+    ;; A buffer still visiting it would make `find-file' ask about the change.
+    (when (get-file-buffer f) (kill-buffer (get-file-buffer f)))
     (with-temp-file f (insert "line one\nline two\nline three\n"))
     f))
 
@@ -86,6 +88,26 @@
       (should (equal (mapcar (lambda (w) (plist-get w :id)) (plist-get state :workspaces))
                      (mapcar (lambda (w) (plist-get w :id))
                              (plist-get (terra-emacs-capture-all 'tab-bar) :workspaces)))))))
+
+(ert-deftest terra-emacs-capture-reads-hidden-workspaces-without-showing-them ()
+  (terra-emacs-test-reset-tabs)
+  (let ((a (terra-emacs-test--file "a.txt"))
+        (b (terra-emacs-test--file "b.txt"))
+        (switches 0))
+    (tab-bar-rename-tab "main")
+    (find-file a)
+    (terra-emacs-backend-create 'tab-bar "other")
+    (terra-emacs-backend-with-workspace 'tab-bar "other"
+                                        (lambda () (terra-emacs-test--split-layout a b)))
+    (let ((count (lambda (&rest _) (cl-incf switches))))
+      (advice-add 'tab-bar-select-tab :before count)
+      (unwind-protect
+          (let ((other (terra-emacs-capture "other" 'tab-bar)))
+            (should (= switches 0))
+            (should (equal (mapcar #'terra-emacs-leaf-key
+                                   (terra-emacs-layout-leaves (plist-get other :layout)))
+                           (list (list 'file a) (list 'file b) '(buffer "*scratch*")))))
+        (advice-remove 'tab-bar-select-tab count)))))
 
 (ert-deftest terra-emacs-capture-state-file-round-trip ()
   (terra-emacs-test-reset-tabs)

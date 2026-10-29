@@ -48,7 +48,12 @@
   "The tree node of the window STATE (TYPE . ITEMS)."
   (let ((type (car state)) (items (cdr state)))
     (if (eq type 'leaf)
-        (let ((rec (alist-get 'terra-emacs-leaf (alist-get 'parameters items))))
+        ;; The buffer it shows, else (killed since) the record it was saved with.
+        (let* ((entry (cdr (assq 'buffer items)))
+               (buffer (and entry (get-buffer (car entry))))
+               (rec (if (buffer-live-p buffer)
+                        (terra-emacs-leaf-capture buffer)
+                      (alist-get 'terra-emacs-leaf (alist-get 'parameters items)))))
           (append (list :leaf rec)
                   (and (alist-get 'selected (cdr (assq 'buffer items))) (list :selected t))))
       (let ((children (cl-remove-if-not (lambda (i) (memq (car-safe i) '(leaf vc hc))) items))
@@ -75,9 +80,12 @@
   (let ((frame (or frame (selected-frame))))
     (dolist (w (window-list frame 'nomini))
       (set-window-parameter w 'terra-emacs-leaf (terra-emacs-leaf-capture (window-buffer w))))
-    (let ((state (window-state-get (terra-emacs-layout--root frame) t)))
-      ;; A writable state may start with an alist of minimum sizes.
-      (terra-emacs-layout--node (if (consp (car state)) (cdr state) state)))))
+    (terra-emacs-layout-from-state (window-state-get (terra-emacs-layout--root frame) t))))
+
+(defun terra-emacs-layout-from-state (state)
+  "The layout of the window STATE (from `window-state-get')."
+  ;; A state may start with an alist of minimum sizes.
+  (terra-emacs-layout--node (if (consp (car state)) (cdr state) state)))
 
 ;;;; Apply
 
