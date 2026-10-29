@@ -6,6 +6,7 @@
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: frames, convenience
+;; URL: https://github.com/davidawad/terra-emacs.el
 ;; SPDX-License-Identifier: MIT
 
 ;; This file is not part of GNU Emacs.

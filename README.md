@@ -12,6 +12,31 @@ all come back as they were.
 Pure Emacs Lisp, Emacs 29.1 or later, no dependencies. eat, vterm and
 persp-mode are used when present.
 
+## Install
+
+Emacs 30 and later, with `package-vc`:
+
+```elisp
+(package-vc-install "https://github.com/davidawad/terra-emacs.el")
+(require 'terra-emacs)
+(terra-emacs-autosave-mode 1)   ; optional: save on exit, restore at start
+```
+
+Emacs 29.1, or by hand: clone the repository and put it on `load-path`.
+
+```elisp
+(add-to-list 'load-path "~/src/terra-emacs.el")
+(require 'terra-emacs)
+```
+
+With `use-package` (Emacs 30):
+
+```elisp
+(use-package terra-emacs
+  :vc (:url "https://github.com/davidawad/terra-emacs.el")
+  :config (terra-emacs-autosave-mode 1))
+```
+
 ## Commands
 
 | Command | Does |
@@ -164,3 +189,9 @@ layouts.
 warnings as errors. It then runs each `test/test-*.el` ERT suite in its
 own batch Emacs, one at a time. eat and persp-mode come from
 `TERRA_EMACS_TEST_PACKAGES` (default `/opt/emacs-test-packages`).
+
+`make test` runs the same script.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

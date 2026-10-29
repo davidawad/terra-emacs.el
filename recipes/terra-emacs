@@ -1,0 +1,2 @@
+(terra-emacs :fetcher github :repo "davidawad/terra-emacs.el"
+             :files ("terra-emacs*.el"))

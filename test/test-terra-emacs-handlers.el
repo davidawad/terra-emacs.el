@@ -108,7 +108,9 @@
     (unwind-protect
         (progn
           (should (eq (buffer-local-value 'major-mode buf) 'vterm-mode))
-          (should (equal (terra-emacs-test--wait-file (expand-file-name "where" dir))
+          ;; `pwd' prints the logical path; compare truenames (macOS
+          ;; temp dirs sit under the /var -> /private/var symlink).
+          (should (equal (file-truename (terra-emacs-test--wait-file (expand-file-name "where" dir)))
                          (directory-file-name (file-truename dir))))
           (let ((cap (terra-emacs-leaf-capture buf)))
             (should (equal (terra-emacs-leaf-prop cap 'command) cmd))

@@ -3,8 +3,6 @@
 ;; Copyright (C) 2026 David Awad
 
 ;; Author: David Awad <davidawad@protonmail.com>
-;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: frames, convenience
 ;; SPDX-License-Identifier: MIT
 
