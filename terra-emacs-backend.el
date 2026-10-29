@@ -50,6 +50,10 @@ Nil picks the first available of `terra-emacs-backend-candidates'."
   "Backends tried, in order, when `terra-emacs-backend' is nil."
   :type '(repeat symbol))
 
+(defcustom terra-emacs-tab-bar-saved-parameters nil
+  "Keys of a tab's alist captured and applied as its saved parameters."
+  :type '(repeat symbol))
+
 (defvar terra-emacs-levels nil
   "The declared levels, a list of (:id ID :name NAME) plists.")
 
@@ -93,6 +97,15 @@ Nil picks the first available of `terra-emacs-backend-candidates'."
 
 (cl-defgeneric terra-emacs-backend-set-id (backend name id)
   "Record ID as the terra-emacs id of BACKEND's workspace NAME.")
+
+(cl-defgeneric terra-emacs-backend-parameters (_backend _name)
+  "The saved parameters of BACKEND's workspace NAME: ((PARAM . VALUE) ...).
+Which parameters a backend saves is its own option; nil values are left out."
+  nil)
+
+(cl-defgeneric terra-emacs-backend-set-parameter (_backend _name _param _value)
+  "Set the saved parameter PARAM of BACKEND's workspace NAME to VALUE."
+  nil)
 
 (cl-defgeneric terra-emacs-backend-add-buffer (_backend _name _buffer)
   "Note that BUFFER belongs to workspace NAME (persp-mode keeps buffer lists)."
@@ -195,6 +208,16 @@ Nil picks the first available of `terra-emacs-backend-candidates'."
   (let ((tab (terra-emacs-tab-bar--tab name)))
     (setcdr tab (cons (cons 'terra-emacs-id id)
                       (assq-delete-all 'terra-emacs-id (cdr tab))))))
+
+(cl-defmethod terra-emacs-backend-parameters ((_ (eql 'tab-bar)) name)
+  (let ((tab (terra-emacs-tab-bar--tab name)))
+    (cl-loop for p in terra-emacs-tab-bar-saved-parameters
+             for v = (alist-get p (cdr tab))
+             when v collect (cons p v))))
+
+(cl-defmethod terra-emacs-backend-set-parameter ((_ (eql 'tab-bar)) name param value)
+  (let ((tab (terra-emacs-tab-bar--tab name)))
+    (setcdr tab (cons (cons param value) (assq-delete-all param (cdr tab))))))
 
 (provide 'terra-emacs-backend)
 ;;; terra-emacs-backend.el ends here

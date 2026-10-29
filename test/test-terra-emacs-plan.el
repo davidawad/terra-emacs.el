@@ -114,6 +114,50 @@
     (should (member '(kill "extra") (terra-emacs-test--ops (terra-emacs-apply state nil 'tab-bar))))
     (should-not (terra-emacs-plan state 'tab-bar))))
 
+(ert-deftest terra-emacs-plan-partial-states-touch-only-what-they-name ()
+  (terra-emacs-test-reset-tabs)
+  (let* ((terra-emacs-levels nil)
+         (files (terra-emacs-test--files "a.txt"))
+         (state (list :terra-emacs 1 :partial t
+                      :workspaces (list (list :name "solo" :layout (terra-emacs-test--leaf (car files)))))))
+    (terra-emacs-backend-create 'tab-bar "other")
+    (should (equal (terra-emacs-test--ops (terra-emacs-apply state nil 'tab-bar))
+                   '((create "solo") (layout "solo"))))
+    (should (equal (terra-emacs-backend-workspaces 'tab-bar) '("*reset*" "other" "solo")))
+    (should-not (terra-emacs-plan state 'tab-bar))))
+
+(ert-deftest terra-emacs-plan-saved-parameters ()
+  (terra-emacs-test-reset-tabs)
+  (let* ((terra-emacs-levels nil)
+         (terra-emacs-tab-bar-saved-parameters '(owner digest))
+         (state (list :terra-emacs 1
+                      :workspaces (list (list :name "*reset*")
+                                        (list :name "tagged" :parameters '((owner . "pm") (digest . "d1")))))))
+    (should (equal (terra-emacs-test--ops (terra-emacs-apply state nil 'tab-bar))
+                   '((create "tagged") (parameters "tagged"))))
+    (should (equal (terra-emacs-backend-parameters 'tab-bar "tagged") '((owner . "pm") (digest . "d1"))))
+    (should (equal (plist-get (terra-emacs-capture "tagged" 'tab-bar) :parameters)
+                   '((owner . "pm") (digest . "d1"))))
+    (should-not (terra-emacs-plan state 'tab-bar))
+    (terra-emacs-backend-set-parameter 'tab-bar "tagged" 'digest "d2")
+    (should (equal (terra-emacs-test--ops (terra-emacs-apply state nil 'tab-bar))
+                   '((parameters "tagged"))))
+    (should (equal (terra-emacs-backend-parameters 'tab-bar "tagged") '((owner . "pm") (digest . "d1"))))))
+
+(ert-deftest terra-emacs-layout-leaves-side-windows-alone ()
+  (terra-emacs-test-reset-tabs)
+  (let* ((files (terra-emacs-test--files "a.txt" "b.txt"))
+         (side (display-buffer-in-side-window (get-buffer-create "*side*") '((side . left))))
+         (tree (list :split 'below :sizes '(0.5 0.5)
+                     :children (list (terra-emacs-test--leaf (nth 0 files))
+                                     (terra-emacs-test--leaf (nth 1 files))))))
+    (unwind-protect
+        (progn
+          (terra-emacs-layout-apply tree)
+          (should (window-live-p side))
+          (should (terra-emacs-layout-same-p tree (terra-emacs-layout-capture))))
+      (when (window-live-p side) (delete-window side)))))
+
 (defun terra-emacs-test--round-trip (backend)
   "Capture BACKEND's set, kill every workspace, apply, capture: equal."
   (let* ((files (terra-emacs-test--files "a.txt" "b.txt" "c.txt"))

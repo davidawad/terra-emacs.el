@@ -17,8 +17,12 @@
 ;;    :current "main"                   the workspace shown
 ;;    :workspaces
 ;;    ((:name "main" :id "6f1c..." :level "ops"
+;;      :parameters ((owner . "pm"))   saved backend parameters
 ;;      :layout (:split right :sizes (0.5 0.5) :children (...)))
 ;;     ...))                            in display order
+;;
+;; A state with `:partial t' names only some workspaces: applying it
+;; kills, moves and selects nothing else.
 ;;
 ;; A workspace with no :layout is left as it is laid out; one with no
 ;; :id is matched by name.  `terra-emacs-capture-all' writes the full
@@ -50,8 +54,10 @@ Interactively, show it in a buffer."
          (layout (terra-emacs-backend-with-workspace
                   backend name #'terra-emacs-layout-capture))
          (level (terra-emacs-backend-level backend name))
+         (params (terra-emacs-backend-parameters backend name))
          (ws (append (list :name name :id (terra-emacs--ws-id backend name))
                      (and level (list :level level))
+                     (and params (list :parameters params))
                      (list :layout layout))))
     (when (called-interactively-p 'any) (terra-emacs-show-state ws))
     ws))

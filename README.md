@@ -68,9 +68,18 @@ A state is one readable s-expression (`lisp-data-mode`):
   persp-mode it is a perspective parameter
   (`terra-emacs-persp-level-parameter`). `:levels` declares their
   names, and `terra-emacs-levels-functions` hears about it.
+- **Saved parameters** (`:parameters ((PARAM . VALUE) ...)`) carry
+  backend data a workspace should keep across a restart, such as
+  another tool's tags. The keys are chosen by
+  `terra-emacs-tab-bar-saved-parameters` or
+  `terra-emacs-persp-saved-parameters`.
+- **`:partial t`** marks a state that names only some workspaces.
+  Applying it creates, renames, levels and lays out what it names. It
+  kills, moves and selects nothing else.
 - **Layouts** are split trees, after kiwanami's window-layout recipes:
   `(:split right|below :sizes SHARES :children NODES)` or
-  `(:leaf RECORD [:selected t])`.
+  `(:leaf RECORD [:selected t])`. They fill the frame's main window, so
+  side windows are left alone.
 - **Leaves** are bookmark records. Any mode with bookmark support
   restores for free. terra-emacs adds `buffer-name`, and `terra-key`
   (the leaf's identity, which decides whether a window already shows

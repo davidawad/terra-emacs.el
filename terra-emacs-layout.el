@@ -58,12 +58,24 @@
                              children)
               :children (mapcar #'terra-emacs-layout--node children))))))
 
+(defun terra-emacs-layout--root (frame)
+  "FRAME's main window: its root, less any side windows."
+  (window-main-window frame))
+
+(defun terra-emacs-layout--first (frame)
+  "The first live window of FRAME's main window."
+  (let ((root (terra-emacs-layout--root frame)))
+    (if (window-live-p root)
+        root
+      (catch 'live
+        (walk-window-subtree (lambda (w) (when (window-live-p w) (throw 'live w))) root)))))
+
 (defun terra-emacs-layout-capture (&optional frame)
-  "The layout of FRAME (default: the selected one)."
+  "The layout of FRAME (default: the selected one), side windows aside."
   (let ((frame (or frame (selected-frame))))
     (dolist (w (window-list frame 'nomini))
       (set-window-parameter w 'terra-emacs-leaf (terra-emacs-leaf-capture (window-buffer w))))
-    (let ((state (window-state-get (frame-root-window frame) t)))
+    (let ((state (window-state-get (terra-emacs-layout--root frame) t)))
       ;; A writable state may start with an alist of minimum sizes.
       (terra-emacs-layout--node (if (consp (car state)) (cdr state) state)))))
 
@@ -126,19 +138,26 @@ Its leaves show BUFFERS, in order."
   (let* ((frame (or frame (selected-frame)))
          (buffers (mapcar #'terra-emacs-leaf-restore (terra-emacs-layout-leaves tree))))
     (with-selected-frame frame
-      (delete-other-windows (frame-first-window frame))
-      (set-window-buffer (frame-first-window frame) (car buffers))
+      (let ((first (terra-emacs-layout--first frame))
+            (root (terra-emacs-layout--root frame)))
+        (select-window first)
+        ;; Only inside the main window: side windows stay.
+        (unless (window-live-p root) (delete-other-windows-internal first root))
+        (set-window-buffer first (car buffers)))
       (condition-case err
           (window-state-put (terra-emacs-layout-window-state tree buffers)
-                            (frame-root-window frame) 'safe)
+                            (terra-emacs-layout--root frame) 'safe)
         (error (message "terra-emacs: the frame cannot hold this layout (%s); one window"
                         (error-message-string err))
-               (delete-other-windows (frame-first-window frame))
-               (set-window-buffer (frame-first-window frame) (car buffers))
-               (set-window-parameter (frame-first-window frame) 'terra-emacs-leaf
-                                     (car (terra-emacs-layout-leaves tree)))))
-      (dolist (w (window-list frame 'nomini (frame-first-window frame)))
-        (run-hook-with-args 'terra-emacs-layout-show-functions w (window-buffer w))))))
+               (let ((first (terra-emacs-layout--first frame))
+                     (root (terra-emacs-layout--root frame)))
+                 (unless (window-live-p root) (delete-other-windows-internal first root))
+                 (set-window-buffer first (car buffers))
+                 (set-window-parameter first 'terra-emacs-leaf
+                                       (car (terra-emacs-layout-leaves tree))))))
+      (dolist (w (window-list frame 'nomini (terra-emacs-layout--first frame)))
+        (unless (window-parameter w 'window-side)
+          (run-hook-with-args 'terra-emacs-layout-show-functions w (window-buffer w)))))))
 
 ;;;; Comparing
 

@@ -51,6 +51,10 @@
 Nil orders workspaces as `persp-names-cache' does."
   :type '(choice (const nil) symbol) :group 'terra-emacs)
 
+(defcustom terra-emacs-persp-saved-parameters nil
+  "Perspective parameters captured and applied as a workspace's saved parameters."
+  :type '(repeat symbol) :group 'terra-emacs)
+
 (defun terra-emacs-persp--get (name)
   "The perspective NAME; an error when there is none."
   (let ((p (persp-get-by-name name *persp-hash* :none)))
@@ -127,6 +131,15 @@ Nil orders workspaces as `persp-names-cache' does."
 
 (cl-defmethod terra-emacs-backend-set-id ((_ (eql 'persp-mode)) name id)
   (set-persp-parameter terra-emacs-persp-id-parameter id (terra-emacs-persp--get name)))
+
+(cl-defmethod terra-emacs-backend-parameters ((_ (eql 'persp-mode)) name)
+  (let ((p (terra-emacs-persp--get name)))
+    (cl-loop for param in terra-emacs-persp-saved-parameters
+             for v = (persp-parameter param p)
+             when v collect (cons param v))))
+
+(cl-defmethod terra-emacs-backend-set-parameter ((_ (eql 'persp-mode)) name param value)
+  (set-persp-parameter param value (terra-emacs-persp--get name)))
 
 (cl-defmethod terra-emacs-backend-add-buffer ((_ (eql 'persp-mode)) name buffer)
   (persp-add-buffer buffer (terra-emacs-persp--get name) nil nil))
