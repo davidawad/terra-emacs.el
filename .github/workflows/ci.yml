@@ -17,11 +17,12 @@ jobs:
       - uses: purcell/setup-emacs@master
         with:
           version: ${{ matrix.emacs_version }}
-      - name: Fetch eat and persp-mode for the suites that use them
+      - name: Fetch eat (and compat, which eat needs before Emacs 30) and persp-mode
         run: |
+          git clone --quiet --depth 1 --branch 31.1.0.0 https://github.com/emacs-compat/compat "$RUNNER_TEMP/compat"
           git clone --quiet --depth 1 --branch v0.9.4 https://codeberg.org/akib/emacs-eat "$RUNNER_TEMP/eat"
           git clone --quiet --depth 1 --branch v3.0.9 https://github.com/Bad-ptr/persp-mode.el "$RUNNER_TEMP/persp-mode"
       - name: Byte-compile and test
         env:
-          TERRA_EMACS_TEST_LOAD_PATH: ${{ runner.temp }}/eat:${{ runner.temp }}/persp-mode
+          TERRA_EMACS_TEST_LOAD_PATH: ${{ runner.temp }}/compat:${{ runner.temp }}/eat:${{ runner.temp }}/persp-mode
         run: make test
