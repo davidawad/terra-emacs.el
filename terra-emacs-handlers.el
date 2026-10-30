@@ -97,9 +97,12 @@ returned as it is."
               (process-environment (or environment process-environment)))
           (terra-emacs-handlers--stop buf)
           (eat-mode)
-          (setq default-directory (terra-emacs-handlers--dir dir))
           (eat-exec buf (string-trim name "\\*" "\\*") (car argv) nil (cdr argv))
-          (setq terra-emacs-eat-argv argv)))
+          (setq terra-emacs-eat-argv argv))
+        ;; Outside the `let': its binding of the buffer-local value is
+        ;; undone on exit, which would leave the buffer in the caller's
+        ;; directory and make the next capture record the wrong cwd.
+        (setq default-directory (terra-emacs-handlers--dir dir)))
       buf)))
 
 (defun terra-emacs-eat-bookmark-handler (record)

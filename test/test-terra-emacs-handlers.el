@@ -63,6 +63,10 @@
                                                            "\n")))
                          (directory-file-name (file-truename dir))))
           (should (equal (buffer-local-value 'terra-emacs-eat-argv buf) argv))
+          ;; The buffer stays in DIR (not the caller's directory), so the
+          ;; next capture records the right cwd.
+          (should (equal (file-truename (buffer-local-value 'default-directory buf))
+                         (file-name-as-directory (file-truename dir))))
           ;; Observed: the record it was restored from, live.
           (let ((seen (terra-emacs-leaf-observe buf)))
             (should (equal (terra-emacs-leaf-key seen) (list 'eat "*shell-work*" argv)))
