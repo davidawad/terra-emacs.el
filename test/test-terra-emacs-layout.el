@@ -147,5 +147,16 @@
     (with-temp-file file (insert "(:terra-emacs 99)"))
     (should-error (terra-emacs-read-state file))))
 
+(ert-deftest terra-emacs-state-file-new-directory-and-any-text ()
+  "Autosave into a missing directory, with names no 8-bit coding holds, never errors or prompts."
+  (let* ((file (expand-file-name "fresh/sub/state.eld" (terra-emacs-test-tmpdir)))
+         (name "agent \u2014 tab \U0001F680 \x3FFFE2")
+         (state (list :terra-emacs 1 :backend 'tab-bar :current name
+                      :workspaces (list (list :name name :id "id-x")))))
+    (cl-letf (((symbol-function 'select-safe-coding-system)
+               (lambda (&rest _) (error "Prompted for a coding system"))))
+      (terra-emacs-write-state state file))
+    (should (equal (plist-get (terra-emacs-read-state file) :current) name))))
+
 (provide 'test-terra-emacs-layout)
 ;;; test-terra-emacs-layout.el ends here

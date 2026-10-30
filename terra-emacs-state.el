@@ -56,10 +56,13 @@
 
 (defun terra-emacs-write-state (state file)
   "Write STATE to FILE (atomically: a temp file renamed over it)."
+  (make-directory (file-name-directory file) t)
   (let ((tmp (make-temp-file (expand-file-name ".terra-emacs-" (file-name-directory file))))
-        (text (concat ";; terra-emacs state -*- mode: lisp-data -*-\n"
-                      (terra-emacs-state-string state))))
-    (make-directory (file-name-directory file) t)
+        (text (concat ";; terra-emacs state -*- mode: lisp-data; coding: utf-8-emacs-unix -*-\n"
+                      (terra-emacs-state-string state)))
+        ;; Never ask: state holds arbitrary buffer names and titles, and an
+        ;; autosave timer that prompts for a coding system wedges the minibuffer.
+        (coding-system-for-write 'utf-8-emacs-unix))
     (with-temp-file tmp (insert text))
     (rename-file tmp file t)
     file))
