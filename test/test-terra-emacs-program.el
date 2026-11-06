@@ -4,7 +4,8 @@
 ;; The registry and how a leaf overrides it; the handler starting a
 ;; program in eat with its args, env and cwd and reusing it live, or
 ;; calling a registered Lisp launcher; capture giving back the leaf
-;; exactly, through a state file.
+;; exactly, through a state file; a plan seeing changed args, env or
+;; registry defaults.
 
 ;;; Code:
 
@@ -202,6 +203,46 @@
               ;; Restoring the saved state changes nothing.
               (should-not (terra-emacs-plan back 'tab-bar))))
         (terra-emacs-test--kill buf)
+        (terra-emacs-test-reset-tabs)))))
+
+(ert-deftest terra-emacs-program-plan-differs ()
+  (skip-unless (terra-emacs-test-have 'eat))
+  (terra-emacs-test--with-programs
+    (let* ((dir (terra-emacs-test-tmpdir))
+           (out (expand-file-name "out" dir))
+           (state (lambda (rec) (list :terra-emacs 1
+                                      :workspaces (list (list :name "*reset*"
+                                                              :layout (list :leaf rec))))))
+           (leaf (lambda (&rest props)
+                   (apply #'terra-emacs-test--program-leaf "sh" 'buffer-name "*sh plan*" props)))
+           (a (funcall leaf)))
+      (terra-emacs-test--define-sh dir)
+      (terra-emacs-test-reset-tabs)
+      (unwind-protect
+          (progn
+            (terra-emacs-apply (funcall state a) nil 'tab-bar)
+            (should (equal (car (split-string (terra-emacs-test--wait-file out))) "one"))
+            (should-not (terra-emacs-plan (funcall state a) 'tab-bar))
+            ;; Changed args, env or config: a rebuild.
+            (dolist (b (list (funcall leaf 'args (list "-c" "echo \"$0\" > out; sleep 30" "two"))
+                             (funcall leaf 'env '(("FOO" . "other")))
+                             (funcall leaf 'config '(:k 2))))
+              (let ((plan (terra-emacs-plan (funcall state b) 'tab-bar)))
+                (should (equal (mapcar (lambda (s) (plist-get s :why)) plan) '(differs)))))
+            ;; A registry default changed under the live process: a rebuild too.
+            (let ((terra-emacs-programs (copy-tree terra-emacs-programs)))
+              (terra-emacs-define-program "sh" :command "/bin/sh" :args '("-c" "sleep 30")
+                                          :env '(("FOO" . "registry")) :cwd dir)
+              (should (equal (mapcar (lambda (s) (plist-get s :why))
+                                     (terra-emacs-plan (funcall state a) 'tab-bar))
+                             '(differs))))
+            ;; Applying the change restarts the program with it, then plans nothing.
+            (rename-file out (concat out ".1"))
+            (let ((b (funcall leaf 'args (list "-c" "echo \"$0\" > out; sleep 30" "two"))))
+              (terra-emacs-apply (funcall state b) nil 'tab-bar)
+              (should (equal (terra-emacs-test--wait-file out) "two"))
+              (should-not (terra-emacs-plan (funcall state b) 'tab-bar))))
+        (terra-emacs-test--kill (get-buffer "*sh plan*"))
         (terra-emacs-test-reset-tabs)))))
 
 (provide 'test-terra-emacs-program)

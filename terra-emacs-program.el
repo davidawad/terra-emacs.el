@@ -45,7 +45,9 @@
 ;; (program, args, env, cwd, config, ...), so save and restore
 ;; round-trip exactly: `terra-emacs-program-capture' sits on
 ;; `terra-emacs-leaf-capture-functions' ahead of any generic terminal
-;; capture.
+;; capture.  Its argv, env and config are part of a leaf's identity, so
+;; a plan rebuilds a layout whose program runs something else (:why
+;; differs), and the rebuild restarts it.
 
 ;;; Code:
 
@@ -185,10 +187,18 @@ ENVIRONMENT, reusing a buffer NAME whose live process already runs ARGV."
 
 (put 'terra-emacs-program-handler 'terra-emacs-leaf-process
      (lambda (record) (terra-emacs-program--process-p (terra-emacs-program-spec record))))
-(put 'terra-emacs-program-handler 'terra-emacs-leaf-key-function
-     (lambda (record)
-       (let ((spec (terra-emacs-program-spec record)))
-         (list 'program (plist-get spec :buffer-name) (plist-get spec :program)))))
+(defun terra-emacs-program-leaf-key (record)
+  "The identity of the program leaf RECORD: buffer, program, argv, env, config.
+An observed leaf's `terra-live' (what runs) stands in for the merge, so
+a leaf whose args, env or config differ from the live process, or whose
+registry entry changed, plans a rebuild."
+  (let ((spec (terra-emacs-program-spec record)))
+    (list 'program (plist-get spec :buffer-name) (plist-get spec :program)
+          (if (assq 'terra-live (cdr record))
+              (terra-emacs-leaf-prop record 'terra-live)
+            (terra-emacs-program--identity spec)))))
+
+(put 'terra-emacs-program-handler 'terra-emacs-leaf-key-function #'terra-emacs-program-leaf-key)
 
 ;;;; Capture
 
