@@ -39,6 +39,7 @@
 (require 'terra-emacs-state)
 (require 'terra-emacs-plan)
 (require 'terra-emacs-handlers)
+(require 'terra-emacs-program)
 (require 'terra-emacs-claude)
 (require 'terra-emacs-sets)
 
