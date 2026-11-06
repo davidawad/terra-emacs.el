@@ -161,6 +161,7 @@ nothing.
 | eat | `terra-emacs-eat-bookmark-handler`, buffer-name, cwd, argv | the live buffer running that argv, else argv re-run in cwd |
 | vterm | `terra-emacs-vterm-bookmark-handler`, buffer-name, cwd, command | the same, through `vterm-mode` |
 | Claude Code in eat | `terra-emacs-claude-bookmark-handler`, session-id, cwd, argv, env | argv minus `--resume`/`--session-id`/`--continue`, plus `--resume ID`, in eat, with inherited `CLAUDE*`, `CLAUDECODE`, `AGENT_*`, `AWAD_*`, `LOADOUT_*` and `BD_ACTOR` removed from the child env |
+| a registered program | `terra-emacs-program-handler`, program, args, env, cwd, config, input | see [Program leaves](#program-leaves) |
 | anything else | `terra-emacs-leaf-buffer-handler`, buffer-name | that buffer (created empty if gone) |
 
 A terminal of the same name whose command the engine does not know (one
@@ -178,6 +179,64 @@ Give the handler a `terra-emacs-leaf-key-function` property (a function
 of the record returning its identity) and, when it runs a process, a
 non-nil `terra-emacs-leaf-process` property so a dead one is restarted.
 Its capture side goes on `terra-emacs-leaf-capture-functions`.
+
+## Program leaves
+
+A program leaf names a program and what to run it with. Defaults live in
+a registry, `terra-emacs-programs`, an alist from program name to a
+plist; `terra-emacs-define-program` adds or replaces an entry:
+
+```elisp
+(terra-emacs-define-program "py"
+  :command "python3"                    ; or a function of the spec: a string or an argv
+  :args '("-q")
+  :env '(("PYTHONUNBUFFERED" . "1"))    ; a nil value unsets the variable
+  :cwd "~/src/"
+  :config '(:theme dark)                ; for :command and :launch functions
+  :input "import os"                    ; sent once the program is up
+  :buffer-name "*py*")                  ; default "*NAME*"
+
+(terra-emacs-define-program "notes"     ; a Lisp launcher instead of a terminal
+  :launch (lambda (spec) (find-file-noselect "~/notes.org"))
+  :process nil)                         ; its buffer runs no process
+```
+
+A leaf then names the program and overrides what it needs:
+
+```elisp
+(:leaf ("*py work*" (handler . terra-emacs-program-handler)
+                    (program . "py")
+                    (args "-X" "dev") (args-append . t)   ; => python3 -q -X dev
+                    (env ("DEBUG" . "1"))
+                    (cwd . "~/work/") (config :theme light)
+                    (input "import sys" "print(sys.version)")
+                    (buffer-name . "*py work*")))
+```
+
+- **Merging.** A leaf's `args` replace the entry's, unless the leaf sets
+  `args-append`. `env` and `config` merge per key, the leaf winning.
+  `cwd`, `input` and `buffer-name` replace. A program the registry does
+  not name runs as the command of that name.
+- **Running.** The argv runs in a terminal,
+  `terra-emacs-program-terminal-function` (default eat, through the same
+  path as eat leaves), with the env and in the cwd. An entry's `:launch`
+  function gets the merged spec and returns the buffer instead. A live
+  buffer running the same argv, env and config is reused.
+- **Input.** A leaf's `input` (a string, or a list of lines) is sent once
+  per start, once the program is up: when its output has been quiet
+  `terra-emacs-program-input-settle` seconds, or at the latest after
+  `terra-emacs-program-input-timeout`. A first prompt for a Claude
+  session, or a command line for a shell, goes here. A reused buffer is
+  not sent it again. `terra-emacs-program-send-function`, or an entry's
+  `:send`, does the sending.
+- **Capture.** A program buffer captures back to the leaf it was started
+  from, so save and restore round-trip exactly. The capture runs ahead
+  of the exporter's generic terminal capture.
+- **Plan.** A leaf's argv, env and config are part of its identity, so a
+  leaf that differs from what the live process runs plans
+  `(:op layout ... :why differs)`. So does a registry default changed
+  under a live process. The rebuild restarts the program. A changed
+  `input` alone restarts nothing.
 
 ## Backends
 
