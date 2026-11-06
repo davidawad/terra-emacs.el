@@ -23,6 +23,8 @@
 ;;                `terra-emacs-leaf-key-function' property computes.
 ;;   terra-stale  set on an observed leaf whose process is gone, so a
 ;;                plan restarts it; never written to a state file.
+;;   terra-live   set on an observed leaf by a capture that knows what
+;;                its process really runs; never written either.
 ;;
 ;; To decide whether a window already shows the right thing, a plan
 ;; observes it (`terra-emacs-leaf-observe'): the record a capture
@@ -95,7 +97,8 @@ The property is t, or a function of RECORD answering for that leaf."
 
 (defun terra-emacs-leaf-clean (record)
   "RECORD without what never goes in a state file."
-  (cons (car record) (cl-remove 'terra-stale (cdr record) :key #'car-safe)))
+  (cons (car record) (cl-remove-if (lambda (p) (memq (car-safe p) '(terra-stale terra-live)))
+                                   (cdr record))))
 
 ;;;; Observing
 

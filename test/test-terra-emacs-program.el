@@ -3,7 +3,8 @@
 ;;; Commentary:
 ;; The registry and how a leaf overrides it; the handler starting a
 ;; program in eat with its args, env and cwd and reusing it live, or
-;; calling a registered Lisp launcher.
+;; calling a registered Lisp launcher; capture giving back the leaf
+;; exactly, through a state file.
 
 ;;; Code:
 
@@ -11,6 +12,7 @@
          (expand-file-name "terra-emacs-test-helper"
                            (file-name-directory (or load-file-name buffer-file-name))))
 (require 'terra-emacs-program)
+(require 'terra-emacs-plan)
 
 (defun terra-emacs-test--wait-file (file)
   "Wait up to 5s for FILE to hold a full line; its contents."
@@ -156,6 +158,51 @@
               (terra-emacs-leaf-restore (terra-emacs-test--program-leaf "notes" 'config '(:width 8)))
               (should (= calls 2)))
           (terra-emacs-test--kill buf))))))
+
+(ert-deftest terra-emacs-program-capture-round-trip ()
+  (skip-unless (terra-emacs-test-have 'eat))
+  (terra-emacs-test--with-programs
+    (let* ((dir (terra-emacs-test-tmpdir))
+           (rec (progn (terra-emacs-test--define-sh dir)
+                       (terra-emacs-test--program-leaf
+                        "sh" 'args (list "-c" "sleep 30") 'args-append nil
+                        'env '(("FOO" . "leaf")) 'cwd dir 'config '(:k 1)
+                        'buffer-name "*sh round*")))
+           (state (list :terra-emacs 1
+                        :workspaces (list (list :name "*reset*" :layout (list :leaf rec)))))
+           (file (expand-file-name "state.eld" dir))
+           ;; A generic terminal capture, as terra-emacs-capture installs:
+           ;; the program capture runs ahead of it.
+           (terra-emacs-leaf-capture-functions terra-emacs-leaf-capture-functions)
+           buf)
+      (add-hook 'terra-emacs-leaf-capture-functions
+                (lambda (b) (and (eq (buffer-local-value 'major-mode b) 'eat-mode)
+                                 (terra-emacs-leaf-make (buffer-name b) 'handler
+                                                        'terra-emacs-eat-bookmark-handler))))
+      (terra-emacs-test-reset-tabs)
+      (unwind-protect
+          (progn
+            (terra-emacs-apply state nil 'tab-bar)
+            (setq buf (get-buffer "*sh round*"))
+            (should (terra-emacs-handlers--live-p buf))
+            (let ((seen (terra-emacs-leaf-observe buf)))
+              (should (terra-emacs-leaf-prop seen 'terra-live))
+              (should (equal (terra-emacs-leaf-clean seen) rec)))
+            ;; Save the live layout to a file and read it back: the same leaf.
+            (terra-emacs-write-state
+             (list :terra-emacs 1
+                   :workspaces (list (list :name "*reset*"
+                                           :layout (terra-emacs-layout-clean
+                                                    (terra-emacs-layout-current)))))
+             file)
+            (let ((back (terra-emacs-read-state file)))
+              (should (equal (plist-get (plist-get (car (plist-get back :workspaces)) :layout)
+                                        :leaf)
+                             rec))
+              ;; Restoring the saved state changes nothing.
+              (should-not (terra-emacs-plan back 'tab-bar))))
+        (terra-emacs-test--kill buf)
+        (terra-emacs-test-reset-tabs)))))
 
 (provide 'test-terra-emacs-program)
 ;;; test-terra-emacs-program.el ends here

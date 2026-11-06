@@ -40,6 +40,12 @@
 ;; default eat).  Restoring reuses the buffer when its process runs the
 ;; same spec; a program buffer whose argv, env or config changed is
 ;; restarted.
+;;
+;; A program buffer captures back to the leaf it was started from
+;; (program, args, env, cwd, config, ...), so save and restore
+;; round-trip exactly: `terra-emacs-program-capture' sits on
+;; `terra-emacs-leaf-capture-functions' ahead of any generic terminal
+;; capture.
 
 ;;; Code:
 
@@ -166,9 +172,16 @@ ENVIRONMENT, reusing a buffer NAME whose live process already runs ARGV."
         (with-current-buffer buf (setq terra-emacs-program-live spec))
         buf))))
 
+(defvar-local terra-emacs-program-leaf nil
+  "The program leaf this buffer was started from, as written.")
+(put 'terra-emacs-program-leaf 'permanent-local t)
+
 (defun terra-emacs-program-handler (record)
   "Make the program leaf RECORD's buffer current, starting it when not running."
-  (set-buffer (terra-emacs-program-start (terra-emacs-program-spec record))))
+  (let ((buf (terra-emacs-program-start (terra-emacs-program-spec record))))
+    (with-current-buffer buf
+      (setq terra-emacs-program-leaf (terra-emacs-leaf-clean record)))
+    (set-buffer buf)))
 
 (put 'terra-emacs-program-handler 'terra-emacs-leaf-process
      (lambda (record) (terra-emacs-program--process-p (terra-emacs-program-spec record))))
@@ -176,6 +189,21 @@ ENVIRONMENT, reusing a buffer NAME whose live process already runs ARGV."
      (lambda (record)
        (let ((spec (terra-emacs-program-spec record)))
          (list 'program (plist-get spec :buffer-name) (plist-get spec :program)))))
+
+;;;; Capture
+
+(defun terra-emacs-program-capture (buffer)
+  "The program leaf BUFFER was started from, or nil when it was not.
+The record is the leaf as written, plus `terra-live': the argv, env
+and config the buffer's program really runs, for a plan to compare."
+  (let ((leaf (buffer-local-value 'terra-emacs-program-leaf buffer))
+        (live (buffer-local-value 'terra-emacs-program-live buffer)))
+    (when leaf
+      (append (copy-sequence leaf)
+              (list (cons 'terra-live (terra-emacs-program--identity live)))))))
+
+;; Ahead of terminal captures: a program buffer is an eat buffer too.
+(add-hook 'terra-emacs-leaf-capture-functions #'terra-emacs-program-capture -90)
 
 (provide 'terra-emacs-program)
 ;;; terra-emacs-program.el ends here
