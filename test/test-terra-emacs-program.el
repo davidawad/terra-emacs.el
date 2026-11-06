@@ -5,7 +5,7 @@
 ;; program in eat with its args, env and cwd and reusing it live, or
 ;; calling a registered Lisp launcher; capture giving back the leaf
 ;; exactly, through a state file; a plan seeing changed args, env or
-;; registry defaults.
+;; registry defaults; input sent once the program is up.
 
 ;;; Code:
 
@@ -244,6 +244,68 @@
               (should-not (terra-emacs-plan (funcall state b) 'tab-bar))))
         (terra-emacs-test--kill (get-buffer "*sh plan*"))
         (terra-emacs-test-reset-tabs)))))
+
+(ert-deftest terra-emacs-program-input ()
+  (skip-unless (terra-emacs-test-have 'eat))
+  (terra-emacs-test--with-programs
+    (let* ((dir (terra-emacs-test-tmpdir))
+           (out (expand-file-name "out" dir))
+           (terra-emacs-program-input-settle 0.2)
+           (terra-emacs-program-input-timeout 0.3)
+           (sent 0)
+           (terra-emacs-program-send-function
+            (lambda (buffer lines) (cl-incf sent) (terra-emacs-program-send buffer lines)))
+           bufs)
+      ;; A shell that prints a banner first, with the registry's input.
+      (terra-emacs-define-program
+       "greet" :command "/bin/sh" :cwd dir
+       :args (list "-c" "echo ready; read a; read b; echo \"$a $b\" > out; sleep 30")
+       :input '("hello" "world"))
+      ;; One that prints nothing: its input goes after the timeout.
+      (terra-emacs-define-program
+       "quiet" :command "/bin/sh" :cwd dir
+       :args (list "-c" "read a; echo \"$a\" > out2; sleep 30"))
+      ;; One that never stops printing: its input goes at the deadline.
+      (terra-emacs-define-program
+       "busy" :command "/bin/sh" :cwd dir :input "go"
+       :args (list "-c" "(while echo .; do sleep 0.05; done) & read a; echo \"$a\" > out3; sleep 30"))
+      (unwind-protect
+          (let* ((rec (terra-emacs-test--program-leaf "greet"))
+                 (buf (terra-emacs-leaf-restore rec)))
+            (push buf bufs)
+            (should (equal (terra-emacs-test--wait-file out) "hello world"))
+            (should (= sent 1))
+            ;; Reused: not sent again.
+            (should (eq (terra-emacs-leaf-restore rec) buf))
+            (accept-process-output nil 0.5)
+            (should (= sent 1))
+            ;; A leaf's input overrides the registry's, and capture keeps it.
+            (let* ((rec2 (terra-emacs-test--program-leaf "quiet" 'input "first prompt"))
+                   (buf2 (terra-emacs-leaf-restore rec2)))
+              (push buf2 bufs)
+              (should (equal (terra-emacs-test--wait-file (expand-file-name "out2" dir))
+                             "first prompt"))
+              (should (equal (terra-emacs-leaf-clean (terra-emacs-leaf-observe buf2)) rec2))
+              ;; A changed input alone is not a different program.
+              (should (equal (terra-emacs-leaf-key rec2)
+                             (terra-emacs-leaf-key
+                              (terra-emacs-test--program-leaf "quiet" 'input "other")))))
+            (push (terra-emacs-leaf-restore (terra-emacs-test--program-leaf "busy")) bufs)
+            (should (equal (terra-emacs-test--wait-file (expand-file-name "out3" dir)) "go"))
+            (should (= sent 3)))
+        (mapc #'terra-emacs-test--kill bufs)))))
+
+(ert-deftest terra-emacs-program-input-launcher ()
+  (terra-emacs-test--with-programs
+    (let (got)
+      (terra-emacs-define-program
+       "pad" :process nil
+       :launch (lambda (spec) (get-buffer-create (plist-get spec :buffer-name)))
+       :send (lambda (buffer lines) (push (cons (buffer-name buffer) lines) got)))
+      (let ((buf (terra-emacs-leaf-restore (terra-emacs-test--program-leaf "pad" 'input "do it"))))
+        (unwind-protect
+            (should (equal got '(("*pad*" "do it"))))
+          (terra-emacs-test--kill buf))))))
 
 (provide 'test-terra-emacs-program)
 ;;; test-terra-emacs-program.el ends here

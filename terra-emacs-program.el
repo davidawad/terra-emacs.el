@@ -30,6 +30,10 @@
 ;;                 it starts, in place of a terminal running the argv.
 ;;   :process      nil for a :launch program whose buffer runs no
 ;;                 process (default t: a dead process is stale).
+;;   :input        a string, or a list of lines, sent to the program
+;;                 once it is up: a first prompt, a command line.
+;;   :send         a function of (BUFFER LINES) sending it, in place of
+;;                 `terra-emacs-program-send-function'.
 ;;
 ;; A leaf's keys override the entry's: args replace the entry's args
 ;; unless the leaf sets args-append, env and config merge per key with
@@ -48,6 +52,10 @@
 ;; capture.  Its argv, env and config are part of a leaf's identity, so
 ;; a plan rebuilds a layout whose program runs something else (:why
 ;; differs), and the rebuild restarts it.
+;;
+;; A leaf's input (or its entry's) is sent once per start, when the
+;; program is up; a reused buffer is not sent it again, and a changed
+;; input alone restarts nothing.
 
 ;;; Code:
 
@@ -96,7 +104,7 @@ See `terra-emacs-programs' for the keys.  Return NAME."
 
 (defun terra-emacs-program-spec (record)
   "What the program leaf RECORD runs: its registry entry, overridden.
-A plist of :program :argv :args :env :cwd :config :buffer-name, plus
+A plist of :program :argv :args :env :cwd :config :buffer-name :input, plus
 the entry's other keys."
   (let* ((program (terra-emacs-leaf-prop record 'program))
          (entry (terra-emacs-program-entry program))
@@ -113,12 +121,58 @@ the entry's other keys."
     (setq spec (plist-put spec :config (terra-emacs-program--merge-plist
                                         (plist-get entry :config)
                                         (terra-emacs-leaf-prop record 'config))))
-    (dolist (k '(cwd buffer-name))
+    (dolist (k '(cwd buffer-name input))
       (when (funcall leaf k)
         (setq spec (plist-put spec (intern (format ":%s" k)) (terra-emacs-leaf-prop record k)))))
     (unless (plist-get spec :buffer-name)
       (setq spec (plist-put spec :buffer-name (format "*%s*" program))))
     (plist-put spec :argv (terra-emacs-program--argv (or (plist-get entry :command) program) spec))))
+
+;;;; Input
+
+(defcustom terra-emacs-program-send-function #'terra-emacs-program-send
+  "Function of (BUFFER LINES) sending a started program its input."
+  :type 'function)
+
+(defcustom terra-emacs-program-input-settle 0.5
+  "Seconds a fresh program's output must be quiet before its input is sent."
+  :type 'number)
+
+(defcustom terra-emacs-program-input-timeout 5
+  "Seconds after which a fresh program gets its input, quiet or not."
+  :type 'number)
+
+(defun terra-emacs-program-send (buffer lines)
+  "Type each of LINES, then return, into BUFFER's process."
+  (let ((p (get-buffer-process buffer)))
+    (when (process-live-p p)
+      (dolist (line lines) (process-send-string p (concat line "\r"))))))
+
+(defun terra-emacs-program--send-input (buffer spec)
+  "Send SPEC's input to the program just started in BUFFER, once it is up.
+Up means its output has been quiet `terra-emacs-program-input-settle'
+seconds since it last printed, or `terra-emacs-program-input-timeout'
+seconds passed.  A buffer with no process gets it at once."
+  (let* ((input (plist-get spec :input))
+         (lines (if (listp input) input (list input)))
+         (send (or (plist-get spec :send) terra-emacs-program-send-function))
+         (proc (get-buffer-process buffer))
+         (done nil) (settle nil) (deadline nil) (watch nil))
+    (when input
+      (if (not (process-live-p proc))
+          (funcall send buffer lines)
+        (let ((fire (lambda ()
+                      (unless done
+                        (setq done t)
+                        (cancel-timer deadline)
+                        (when settle (cancel-timer settle))
+                        (remove-function (process-filter proc) watch)
+                        (when (buffer-live-p buffer) (funcall send buffer lines))))))
+          (setq watch (lambda (&rest _)
+                        (when settle (cancel-timer settle))
+                        (setq settle (run-at-time terra-emacs-program-input-settle nil fire))))
+          (add-function :after (process-filter proc) watch)
+          (setq deadline (run-at-time terra-emacs-program-input-timeout nil fire)))))))
 
 ;;;; Launching
 
@@ -172,6 +226,7 @@ ENVIRONMENT, reusing a buffer NAME whose live process already runs ARGV."
                    (funcall terra-emacs-program-terminal-function name dir (plist-get spec :argv)
                             (terra-emacs-program--environment (plist-get spec :env))))))
         (with-current-buffer buf (setq terra-emacs-program-live spec))
+        (terra-emacs-program--send-input buf spec)
         buf))))
 
 (defvar-local terra-emacs-program-leaf nil
