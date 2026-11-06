@@ -26,16 +26,26 @@
 ;;   :cwd          where it runs.
 ;;   :config       a plist for :command and :launch functions.
 ;;   :buffer-name  default "*PROGRAM*".
+;;   :launch       a function of the merged spec returning the buffer
+;;                 it starts, in place of a terminal running the argv.
+;;   :process      nil for a :launch program whose buffer runs no
+;;                 process (default t: a dead process is stale).
 ;;
 ;; A leaf's keys override the entry's: args replace the entry's args
 ;; unless the leaf sets args-append, env and config merge per key with
 ;; the leaf winning.  A program the registry does not name runs as the
 ;; command PROGRAM.  `terra-emacs-define-program' adds an entry.
+;;
+;; The argv runs in a terminal (`terra-emacs-program-terminal-function',
+;; default eat).  Restoring reuses the buffer when its process runs the
+;; same spec; a program buffer whose argv, env or config changed is
+;; restarted.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'terra-emacs-leaf)
+(require 'terra-emacs-handlers)
 
 (defgroup terra-emacs-program nil
   "Program leaves in terra-emacs layouts."
@@ -101,6 +111,71 @@ the entry's other keys."
     (unless (plist-get spec :buffer-name)
       (setq spec (plist-put spec :buffer-name (format "*%s*" program))))
     (plist-put spec :argv (terra-emacs-program--argv (or (plist-get entry :command) program) spec))))
+
+;;;; Launching
+
+(defcustom terra-emacs-program-terminal-function #'terra-emacs-eat-start
+  "Function of (NAME DIR ARGV ENVIRONMENT) returning a terminal buffer.
+It runs ARGV in the buffer NAME in DIR with the `process-environment'
+ENVIRONMENT, reusing a buffer NAME whose live process already runs ARGV."
+  :type 'function)
+
+(defvar-local terra-emacs-program-live nil
+  "The spec (`terra-emacs-program-spec') this buffer's program was started with.")
+(put 'terra-emacs-program-live 'permanent-local t)
+
+(defun terra-emacs-program--identity (spec)
+  "What of SPEC tells two runs of a program apart: argv, env, config."
+  (list (plist-get spec :argv) (plist-get spec :env) (plist-get spec :config)))
+
+(defun terra-emacs-program--environment (env)
+  "`process-environment' with ENV's entries first; a nil value unsets."
+  (append (mapcar (lambda (p) (if (cdr p) (concat (car p) "=" (cdr p)) (car p))) env)
+          process-environment))
+
+(defun terra-emacs-program--process-p (spec)
+  "Non-nil when SPEC's buffer runs a process."
+  (if (plist-member spec :process) (plist-get spec :process) t))
+
+(defun terra-emacs-program--reusable-p (buffer spec)
+  "Non-nil when BUFFER already runs SPEC (or one it cannot identify)."
+  (let ((have (buffer-local-value 'terra-emacs-program-live buffer)))
+    (and (or (not (terra-emacs-program--process-p spec))
+             (terra-emacs-handlers--live-p buffer))
+         (or (null have)
+             (equal (terra-emacs-program--identity have) (terra-emacs-program--identity spec))))))
+
+(defun terra-emacs-program-start (spec)
+  "The buffer running SPEC: a live one reused, else a new start."
+  (let* ((name (plist-get spec :buffer-name))
+         (old (get-buffer name))
+         (dir (terra-emacs-handlers--dir (plist-get spec :cwd))))
+    (if (and old (terra-emacs-program--reusable-p old spec))
+        old
+      ;; Ours, running something else: stop it so it starts afresh.
+      (when (and old (buffer-local-value 'terra-emacs-program-live old))
+        (terra-emacs-handlers--stop old))
+      (let ((buf (if (plist-get spec :launch)
+                     (let ((default-directory dir))
+                       (save-window-excursion
+                         (save-current-buffer
+                           (let ((b (funcall (plist-get spec :launch) spec)))
+                             (if (bufferp b) b (current-buffer))))))
+                   (funcall terra-emacs-program-terminal-function name dir (plist-get spec :argv)
+                            (terra-emacs-program--environment (plist-get spec :env))))))
+        (with-current-buffer buf (setq terra-emacs-program-live spec))
+        buf))))
+
+(defun terra-emacs-program-handler (record)
+  "Make the program leaf RECORD's buffer current, starting it when not running."
+  (set-buffer (terra-emacs-program-start (terra-emacs-program-spec record))))
+
+(put 'terra-emacs-program-handler 'terra-emacs-leaf-process
+     (lambda (record) (terra-emacs-program--process-p (terra-emacs-program-spec record))))
+(put 'terra-emacs-program-handler 'terra-emacs-leaf-key-function
+     (lambda (record)
+       (let ((spec (terra-emacs-program-spec record)))
+         (list 'program (plist-get spec :buffer-name) (plist-get spec :program)))))
 
 (provide 'terra-emacs-program)
 ;;; terra-emacs-program.el ends here

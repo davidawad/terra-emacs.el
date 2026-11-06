@@ -83,9 +83,11 @@ them.")
        (list 'buffer (or (terra-emacs-leaf-prop record 'buffer-name) (car record)))))
 
 (defun terra-emacs-leaf-process-p (record)
-  "Non-nil when RECORD's handler runs a process (its `terra-emacs-leaf-process')."
-  (let ((handler (terra-emacs-leaf-prop record 'handler)))
-    (and (symbolp handler) handler (get handler 'terra-emacs-leaf-process))))
+  "Non-nil when RECORD's handler runs a process (its `terra-emacs-leaf-process').
+The property is t, or a function of RECORD answering for that leaf."
+  (let* ((handler (terra-emacs-leaf-prop record 'handler))
+         (p (and (symbolp handler) handler (get handler 'terra-emacs-leaf-process))))
+    (if (functionp p) (funcall p record) p)))
 
 (defun terra-emacs-leaf-stale-p (record)
   "Non-nil when the observed RECORD's process is gone."
