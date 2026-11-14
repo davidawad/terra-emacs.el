@@ -74,27 +74,57 @@ Emacs's eat buffers."
 
 ;;;; Session files
 
+(defvar terra-emacs-claude--pass nil
+  "What one pass has read so far: a hash table, or nil outside a pass.
+Keys are `sessions' (the records on disk) and each pid asked about.")
+
+(defun terra-emacs-claude-call-with-pass (fn)
+  "Call FN with the session files and each process read at most once.
+A capture asks which session runs in each of many buffers.  Outside a
+pass every such question reads every session file and looks up each
+process of each session's ancestry again.  A pass inside a pass shares
+the outer one.  Start none around code that starts or ends a session."
+  (let ((terra-emacs-claude--pass (or terra-emacs-claude--pass
+                                      (make-hash-table :test #'eql))))
+    (funcall fn)))
+
+(defun terra-emacs-claude--once (key read)
+  "The value of calling READ, kept under KEY for the rest of a pass."
+  (if (not terra-emacs-claude--pass)
+      (funcall read)
+    (let ((known (gethash key terra-emacs-claude--pass 'unread)))
+      (if (eq known 'unread)
+          (puthash key (funcall read) terra-emacs-claude--pass)
+        known))))
+
+(defun terra-emacs-claude--process (pid)
+  "Process PID: its attributes, `hidden' when it lives without any, nil when gone."
+  (terra-emacs-claude--once
+   pid (lambda ()
+         (or (process-attributes pid)
+             ;; Some sandboxes hide process attributes; signal 0 still answers.
+             (and (eql 0 (ignore-errors (signal-process pid 0))) 'hidden)))))
+
 (defun terra-emacs-claude-pid-live-p (pid)
   "Non-nil when process PID exists."
   (and (integerp pid) (> pid 0)
-       (or (process-attributes pid)
-           ;; Some sandboxes hide process attributes; signal 0 still answers.
-           (eql 0 (ignore-errors (signal-process pid 0))))
+       (terra-emacs-claude--process pid)
        t))
 
 (defun terra-emacs-claude--ppid (pid)
   "The parent of process PID, or nil."
-  (or (alist-get 'ppid (process-attributes pid))
-      (let ((stat (format "/proc/%d/stat" pid)))
-        (when (file-readable-p stat)
-          (with-temp-buffer
-            (ignore-errors (insert-file-contents-literally stat))
-            ;; pid (comm) state ppid ...; comm may hold spaces.
-            (when (re-search-forward ") [A-Za-z] \\([0-9]+\\)" nil t)
-              (string-to-number (match-string 1))))))))
+  (let ((process (terra-emacs-claude--process pid)))
+    (or (and (consp process) (alist-get 'ppid process))
+        (let ((stat (format "/proc/%d/stat" pid)))
+          (when (file-readable-p stat)
+            (with-temp-buffer
+              (ignore-errors (insert-file-contents-literally stat))
+              ;; pid (comm) state ppid ...; comm may hold spaces.
+              (when (re-search-forward ") [A-Za-z] \\([0-9]+\\)" nil t)
+                (string-to-number (match-string 1)))))))))
 
-(defun terra-emacs-claude-sessions ()
-  "Every session record (a plist with :pid :sessionId :cwd :status) on disk."
+(defun terra-emacs-claude--read-sessions ()
+  "Read every session record on disk."
   (when (file-directory-p terra-emacs-claude-sessions-directory)
     (delq nil
           (mapcar (lambda (f)
@@ -104,6 +134,10 @@ Emacs's eat buffers."
                         (json-parse-buffer :object-type 'plist :null-object nil
                                            :false-object nil))))
                   (directory-files terra-emacs-claude-sessions-directory t "\\`[0-9]+\\.json\\'")))))
+
+(defun terra-emacs-claude-sessions ()
+  "Every session record (a plist with :pid :sessionId :cwd :status) on disk."
+  (terra-emacs-claude--once 'sessions #'terra-emacs-claude--read-sessions))
 
 (defun terra-emacs-claude-live-session (id)
   "The record of session ID when its process is alive, else nil."

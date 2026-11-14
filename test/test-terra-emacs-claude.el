@@ -138,5 +138,44 @@
       (should (member "sess-old" (terra-emacs-test--lines
                                   (expand-file-name "argv" terra-emacs-test--out)))))))
 
+(ert-deftest terra-emacs-claude-pass-reads-each-thing-once ()
+  (let* ((terra-emacs-test--sessions (terra-emacs-test-tmpdir))
+         (terra-emacs-claude-sessions-directory terra-emacs-test--sessions)
+         (table '((30 . ((ppid . 20))) (20 . ((ppid . 10))) (10 . ((ppid . 1)))))
+         (read-sessions (symbol-function 'terra-emacs-claude--read-sessions))
+         (lookups nil) (reads 0))
+    (terra-emacs-test--session-file 30 "sess-a" "idle")
+    (cl-letf (((symbol-function 'process-attributes)
+               (lambda (pid) (push pid lookups) (alist-get pid table)))
+              ((symbol-function 'signal-process) (lambda (&rest _) -1))
+              ((symbol-function 'terra-emacs-claude--read-sessions)
+               (lambda () (setq reads (1+ reads)) (funcall read-sessions))))
+      ;; Outside a pass every question reads again.
+      (should (terra-emacs-claude-descends-p 30 10))
+      (should (terra-emacs-claude-descends-p 30 10))
+      (should (= (cl-count 30 lookups) 2))
+      (terra-emacs-claude-sessions)
+      (terra-emacs-claude-sessions)
+      (should (= reads 2))
+      (setq lookups nil reads 0)
+      (terra-emacs-claude-call-with-pass
+       (lambda ()
+         (dotimes (_ 5)
+           (should (terra-emacs-claude-descends-p 30 10))
+           (should-not (terra-emacs-claude-descends-p 30 99))
+           (should (terra-emacs-claude-pid-live-p 30))
+           (should-not (terra-emacs-claude-pid-live-p 77))
+           (should (equal (plist-get (car (terra-emacs-claude-sessions)) :sessionId)
+                          "sess-a")))
+         ;; A pass inside a pass shares the outer one.
+         (terra-emacs-claude-call-with-pass
+          (lambda () (should (terra-emacs-claude-pid-live-p 20))))))
+      (should (equal (sort (copy-sequence lookups) #'<) '(10 20 30 77)))
+      (should (= reads 1))
+      ;; The pass is over: the next question reads again.
+      (should-not terra-emacs-claude--pass)
+      (terra-emacs-claude-sessions)
+      (should (= reads 2)))))
+
 (provide 'test-terra-emacs-claude)
 ;;; test-terra-emacs-claude.el ends here
